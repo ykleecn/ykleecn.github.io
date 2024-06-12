@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<search>
+  <entry>
+    <title>QEMU分析之QEMUFile</title>
+    <url>/2024/06/07/qemufile/</url>
+    <content><![CDATA[<p>QEMUFile是一个抽象的数据结构，用于封装io、数据缓冲、数据流等。通过其中定义的ops，可以实现对各种方式的统一操作（比如读、写、close等），屏蔽掉具体的细节。</p>
+<span id="more"></span>
+
+<p>QEMUFile主要是在热迁移等方面使用得比较多。其定义如下：</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">QEMUFile</span> &#123;</span></span><br><span class="line">    <span class="type">const</span> QEMUFileOps *ops;</span><br><span class="line">    <span class="type">const</span> QEMUFileHooks *hooks;</span><br><span class="line">    <span class="type">void</span> *opaque;</span><br><span class="line"></span><br><span class="line">    <span class="type">int64_t</span> bytes_xfer;</span><br><span class="line">    <span class="type">int64_t</span> xfer_limit;</span><br><span class="line"></span><br><span class="line">    <span class="type">int64_t</span> pos; <span class="comment">/* start of buffer when writing, end of buffer</span></span><br><span class="line"><span class="comment">                    when reading */</span></span><br><span class="line">    <span class="type">int</span> buf_index;</span><br><span class="line">    <span class="type">int</span> buf_size; <span class="comment">/* 0 when writing */</span></span><br><span class="line">    <span class="type">uint8_t</span> buf[IO_BUF_SIZE];</span><br><span class="line"></span><br><span class="line">    <span class="class"><span class="keyword">struct</span> <span class="title">iovec</span> <span class="title">iov</span>[<span class="title">MAX_IOV_SIZE</span>];</span></span><br><span class="line">    <span class="type">unsigned</span> <span class="type">int</span> iovcnt;</span><br><span class="line"></span><br><span class="line">    <span class="type">int</span> last_error;</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>主要成员的含义：</p>
+<ul>
+<li>操作函数指针（ops）：这些函数指针指向具体的io操作函数，比如put_buffer、get_buffer等，允许QEMUFile针对不同的后端进行操作。</li>
+<li>缓冲区（buf、buf_size）：临时存储数据的缓冲区和缓冲区的大小。在写入和读取过程中，数据可能先存储在这个缓冲区中，然后按需刷新或填充。</li>
+<li>位置指针（pos）：通常表示已读写的数据总量，或者在文件中的具体位置。比如对于热迁移来说记录已经传输的数据量。</li>
+<li>错误状态（last_error）：指示操作过程中是否出现了错误。</li>
+<li>回调钩子和用户数据（opaque等）。这个可以是用户任意指定的数据或函数。这样可以做一些定制化功能。</li>
+</ul>
+<p>其中QEMUFileOps的定义大致如下：</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="keyword">typedef</span> <span class="class"><span class="keyword">struct</span> <span class="title">QEMUFileOps</span> &#123;</span></span><br><span class="line">  	QEMUFilePutBufferFunc *put_buffer;</span><br><span class="line">    QEMUFileGetBufferFunc *get_buffer;</span><br><span class="line">    QEMUFileCloseFunc *close;</span><br><span class="line">    QEMUFileSetBlocking *set_blocking;</span><br><span class="line">    QEMUFileWritevBufferFunc *writev_buffer;</span><br><span class="line">    QEMURetPathFunc *get_return_path;</span><br><span class="line">    QEMUFileShutdownFunc *shut_down;</span><br><span class="line">&#125; QEMUFileOps;</span><br></pre></td></tr></table></figure>
+
+<p>比如unix socket形式的QEMUFile的ops定义为：</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">const</span> QEMUFileOps unix_read_ops = &#123;</span><br><span class="line">    .get_fd =     socket_get_fd,</span><br><span class="line">    .get_buffer = unix_get_buffer,</span><br><span class="line">    .close =      unix_close</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="type">static</span> <span class="type">const</span> QEMUFileOps unix_write_ops = &#123;</span><br><span class="line">    .get_fd =     socket_get_fd,</span><br><span class="line">    .writev_buffer = unix_writev_buffer,</span><br><span class="line">    .close =      unix_close</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>然后在打开一个QEMUFile时注册这个函数：</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line">QEMUFile *<span class="title function_">qemu_fdopen</span><span class="params">(<span class="type">int</span> fd, <span class="type">const</span> <span class="type">char</span> *mode)</span></span><br><span class="line">&#123;</span><br><span class="line">    QEMUFileSocket *s;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (mode == <span class="literal">NULL</span> ||</span><br><span class="line">        (mode[<span class="number">0</span>] != <span class="string">&#x27;r&#x27;</span> &amp;&amp; mode[<span class="number">0</span>] != <span class="string">&#x27;w&#x27;</span>) ||</span><br><span class="line">        mode[<span class="number">1</span>] != <span class="string">&#x27;b&#x27;</span> || mode[<span class="number">2</span>] != <span class="number">0</span>) &#123;</span><br><span class="line">        <span class="built_in">fprintf</span>(<span class="built_in">stderr</span>, <span class="string">&quot;qemu_fdopen: Argument validity check failed\n&quot;</span>);</span><br><span class="line">        <span class="keyword">return</span> <span class="literal">NULL</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    s = g_malloc0(<span class="keyword">sizeof</span>(QEMUFileSocket));</span><br><span class="line">    s-&gt;fd = fd;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (mode[<span class="number">0</span>] == <span class="string">&#x27;r&#x27;</span>) &#123;</span><br><span class="line">        s-&gt;file = qemu_fopen_ops(s, &amp;unix_read_ops);</span><br><span class="line">    &#125; <span class="keyword">else</span> &#123;</span><br><span class="line">        s-&gt;file = qemu_fopen_ops(s, &amp;unix_write_ops);</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> s-&gt;file;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line">QEMUFile *<span class="title function_">qemu_fopen_ops</span><span class="params">(<span class="type">void</span> *opaque, <span class="type">const</span> QEMUFileOps *ops)</span></span><br><span class="line">&#123;</span><br><span class="line">    QEMUFile *f;</span><br><span class="line"></span><br><span class="line">    f = g_new0(QEMUFile, <span class="number">1</span>);</span><br><span class="line"></span><br><span class="line">    f-&gt;opaque = opaque;</span><br><span class="line">    f-&gt;ops = ops;</span><br><span class="line">    <span class="keyword">return</span> f;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>一般来说，QEMUFile中的qemu_put_buffer、qemu_put_byte等操作是将数据写到QEMUFile的缓冲区中，直到缓冲区满或者主动调用qemu_fflush时才通过writev_buffer函数将数据刷新出去。因此在编写相关程序时，需要格外注意这个差别，如果有数据长时间没有收到，有可能就是这个数据没有刷出去而又没有新的数据到来导致的。</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="type">void</span> <span class="title function_">qemu_put_byte</span><span class="params">(QEMUFile *f, <span class="type">int</span> v)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="keyword">if</span> (f-&gt;last_error) &#123;</span><br><span class="line">        <span class="keyword">return</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    f-&gt;buf[f-&gt;buf_index] = v;</span><br><span class="line">    f-&gt;bytes_xfer++;</span><br><span class="line">    add_to_iovec(f, f-&gt;buf + f-&gt;buf_index, <span class="number">1</span>);</span><br><span class="line">    f-&gt;buf_index++;</span><br><span class="line">    <span class="keyword">if</span> (f-&gt;buf_index == IO_BUF_SIZE) &#123;</span><br><span class="line">        qemu_fflush(f);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="type">void</span> <span class="title function_">qemu_fflush</span><span class="params">(QEMUFile *f)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="type">ssize_t</span> ret = <span class="number">0</span>;</span><br><span class="line">    <span class="type">ssize_t</span> expect = <span class="number">0</span>;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (!qemu_file_is_writable(f)) &#123;</span><br><span class="line">        <span class="keyword">return</span>;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (f-&gt;iovcnt &gt; <span class="number">0</span>) &#123;</span><br><span class="line">        expect = iov_size(f-&gt;iov, f-&gt;iovcnt);</span><br><span class="line">        ret = f-&gt;ops-&gt;writev_buffer(f-&gt;opaque, f-&gt;iov, f-&gt;iovcnt, f-&gt;pos);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (ret &gt;= <span class="number">0</span>) &#123;</span><br><span class="line">        f-&gt;pos += ret;</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="comment">/* We expect the QEMUFile write impl to send the full</span></span><br><span class="line"><span class="comment">     * data set we requested, so sanity check that.</span></span><br><span class="line"><span class="comment">     */</span></span><br><span class="line">    <span class="keyword">if</span> (ret != expect) &#123;</span><br><span class="line">        qemu_file_set_error(f, ret &lt; <span class="number">0</span> ? ret : -EIO);</span><br><span class="line">    &#125;</span><br><span class="line">    f-&gt;buf_index = <span class="number">0</span>;</span><br><span class="line">    f-&gt;iovcnt = <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+]]></content>
+      <categories>
+        <category>虚拟化</category>
+      </categories>
+      <tags>
+        <tag>QEMU</tag>
+        <tag>虚拟化</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>QEMU分析之协程</title>
+    <url>/2024/06/12/qemu-coroutine/</url>
+    <content><![CDATA[<p>协程类似于线程，也是一个调度的实体。<span id="more"></span> 但是不同的是：进程或者线程在切换时需要进行上下文切换，这需要内核的调度器来做换入换出；而协程是一个用户态的调度实体，需要自身主动放弃执行来实现切换。</p>
+<h2 id="qemu中的协程实现"><a href="#qemu中的协程实现" class="headerlink" title="qemu中的协程实现"></a>qemu中的协程实现</h2><p>qemu的协程依赖于setjmp和ucontext两个组件，其中 setjmp 实现协程间的切换，ucontext 实现协程栈空间的创建。主要应用在block io、磁盘镜像操作等异步操作中。</p>
+<blockquote>
+<p>  关于这两个组件的详细介绍可以参考<a href="https://www.binss.me/blog/qemu-note-of-coroutine/">https://www.binss.me/blog/qemu-note-of-coroutine/</a>。这里不关注具体的实现原理。</p>
+</blockquote>
+<p>协程之间的切换主要靠下面三个函数完成的：</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line">qemu_coroutine_create: 创建一个协程</span><br><span class="line">qemu_coroutine_enter: 从当前执行流（协程或线程）切换到指定的协程</span><br><span class="line">qemu_coroutine_yield: 让出当前协程的执行权，返回到该协程被创建或者最近一次被qemu_coroutine_enter调用的上下文中。</span><br></pre></td></tr></table></figure>
+
+<p>在调用<code>qemu_coroutine_yield</code>时，当前协程的上下文（比如程序计数器、栈等）会被保存下来，以便将来恢复执行。操作系统不会介入这个过程，都是在用户空间完成的。</p>
+<p>另外qemu_coroutine_self用于获得当前所处的协程。</p>
+<h2 id="qemu中对协程的使用"><a href="#qemu中对协程的使用" class="headerlink" title="qemu中对协程的使用"></a>qemu中对协程的使用</h2><p>这里分析一下热迁移中可能会用到协程的地方。</p>
+<p>假设热迁移流程process_imcoming_migration_co中还需要与另外一个组件建立连接（去连接一个服务端），并且需要等待连接建立完成。由于连接的建立一般是inet_nonblocking_connect中执行对应一个回调函数，因此可以：（1）在主线程中设置一个轮询函数一直检查连接状态；或者（2）在这之前将当前的co保存下来并传递给连接建立函数中。然后等待连接建立完成的循环中使用qemu_coroutine_yield，建立连接的回调函数中在连接完成后执行qemu_coroutine_enter。这样连接完成后就会直接跳到查询连接状态的地方来做后续的操作。</p>
+<blockquote>
+<p>  由于qemu的网络连接模型是异步的，所以上面的inet_nonblocking_connect -&gt; inet_connect_opts函数会立即返回，并不会等待连接建立完成，所以才需要提供一个回调函数。这也是为什么此处可以使用协程等待连接建立完成的原因。</p>
+</blockquote>
+<p>另外，在qemu比较新的代码中，socket_get_buffer对于nonblock模式的fd，规定必须在协程的上下文中。代码如下：</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">int</span> <span class="title function_">socket_get_buffer</span><span class="params">(<span class="type">void</span> *opaque, <span class="type">uint8_t</span> *buf, <span class="type">int64_t</span> pos, <span class="type">int</span> size)</span></span><br><span class="line">&#123;</span><br><span class="line">    QEMUFileSocket *s = opaque;</span><br><span class="line">    <span class="type">ssize_t</span> len;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">for</span> (;;) &#123;</span><br><span class="line">        len = qemu_recv(s-&gt;fd, buf, size, <span class="number">0</span>);</span><br><span class="line">        <span class="keyword">if</span> (len != <span class="number">-1</span>) &#123;</span><br><span class="line">            <span class="keyword">break</span>;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">if</span> (socket_error() == EAGAIN) &#123;</span><br><span class="line">            yield_until_fd_readable(s-&gt;fd);</span><br><span class="line">        &#125; <span class="keyword">else</span> <span class="keyword">if</span> (socket_error() != EINTR) &#123;</span><br><span class="line">            <span class="keyword">break</span>;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (len == <span class="number">-1</span>) &#123;</span><br><span class="line">        len = -socket_error();</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> len;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<blockquote>
+<p>  据此再补充一点：关于上面的EAGAIN error的场景，一般都是只有非阻塞socket才会产生EAGAIN的错误，意思是当前不可读写需重试。但是在实际开发中可以发现，有时阻塞模式下也会返回EAGAIN。这是因为对阻塞模式的socket设置了超时机制（SO_RCVTIMEO或者SO_SNDTIMEO）。针对这个问题的分析可以参考：<a href="https://blog.csdn.net/cleanfield/article/details/41649985">https://blog.csdn.net/cleanfield/article/details/41649985</a></p>
+</blockquote>
+<h2 id="参考"><a href="#参考" class="headerlink" title="参考"></a>参考</h2><p><a href="https://runsisi.com/2019/03/02/qemu-co/">https://runsisi.com/2019/03/02/qemu-co/</a></p>
+<p><a href="https://www.binss.me/blog/qemu-note-of-coroutine/">https://www.binss.me/blog/qemu-note-of-coroutine/</a></p>
+]]></content>
+      <categories>
+        <category>虚拟化</category>
+      </categories>
+      <tags>
+        <tag>QEMU</tag>
+        <tag>虚拟化</tag>
+      </tags>
+  </entry>
+</search>

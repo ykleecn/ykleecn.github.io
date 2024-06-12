@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width">
+<meta name="theme-color" content="#222"><meta name="generator" content="Hexo 7.2.0">
+
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/blogger_1.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/blogger_1.png">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" integrity="sha256-XOqroi11tY4EFQMR9ZYwZWKj5ZXiftSx36RRuC3anlA=" crossorigin="anonymous">
+
+<script class="next-config" data-name="main" type="application/json">{"hostname":"example.com","root":"/","images":"/images","scheme":"Gemini","darkmode":false,"version":"8.20.0","exturl":false,"sidebar":{"position":"left","width_expanded":320,"width_dual_column":240,"display":"always       //在所有页面中都显示","padding":18,"offset":"12            //文章间距（只对Pisces | Gemini两种风格有效）","b2t":"false            //返回顶部按钮（只对Pisces | Gemini两种风格有效）","scrollpercent":"true   //返回顶部按钮的百分比"},"copycode":{"enable":false,"style":null},"fold":{"enable":false,"height":500},"bookmark":{"enable":false,"color":"#222","save":"auto"},"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"stickytabs":false,"motion":{"enable":false,"async":false,"transition":{"menu_item":"fadeInDown","post_block":"fadeIn","post_header":"fadeInDown","post_body":"fadeInDown","coll_header":"fadeInLeft","sidebar":"fadeInUp"}},"i18n":{"placeholder":"搜索...","empty":"没有找到任何搜索结果：${query}","hits_time":"找到 ${hits} 个搜索结果（用时 ${time} 毫秒）","hits":"找到 ${hits} 个搜索结果"},"path":"/search.xml","localsearch":{"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false}}</script><script src="/js/config.js"></script>
+
+    <meta name="description" content="协程类似于线程，也是一个调度的实体。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="QEMU分析之协程">
+<meta property="og:url" content="http://example.com/2024/06/12/qemu-coroutine/index.html">
+<meta property="og:site_name" content="yklee&#39;s blog">
+<meta property="og:description" content="协程类似于线程，也是一个调度的实体。">
+<meta property="og:locale" content="zh_CN">
+<meta property="article:published_time" content="2024-06-12T14:33:06.000Z">
+<meta property="article:modified_time" content="2024-06-12T14:41:53.854Z">
+<meta property="article:author" content="yklee">
+<meta property="article:tag" content="QEMU">
+<meta property="article:tag" content="虚拟化">
+<meta name="twitter:card" content="summary">
+
+
+<link rel="canonical" href="http://example.com/2024/06/12/qemu-coroutine/">
+
+
+
+<script class="next-config" data-name="page" type="application/json">{"sidebar":"","isHome":false,"isPost":true,"lang":"zh-CN","comments":true,"permalink":"http://example.com/2024/06/12/qemu-coroutine/","path":"2024/06/12/qemu-coroutine/","title":"QEMU分析之协程"}</script>
+
+<script class="next-config" data-name="calendar" type="application/json">""</script>
+<title>QEMU分析之协程 | yklee's blog</title>
+  
+
+
+
+
+
+
+
+
+  <noscript>
+    <link rel="stylesheet" href="/css/noscript.css">
+  </noscript>
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="headband"></div>
+
+  <main class="main">
+    <div class="column">
+      <header class="header" itemscope itemtype="http://schema.org/WPHeader"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏" role="button">
+        <span class="toggle-line"></span>
+        <span class="toggle-line"></span>
+        <span class="toggle-line"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <i class="logo-line"></i>
+      <p class="site-title">yklee's blog</p>
+      <i class="logo-line"></i>
+    </a>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger" aria-label="搜索" role="button">
+        <i class="fa fa-search fa-fw fa-lg"></i>
+    </div>
+  </div>
+</div>
+
+
+
+<nav class="site-nav">
+  <ul class="main-menu menu"><li class="menu-item menu-item-home"><a href="/" rel="section"><i class="fa fa-home fa-fw"></i>首页</a></li><li class="menu-item menu-item-tags"><a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i>标签</a></li><li class="menu-item menu-item-categories"><a href="/categories/" rel="section"><i class="fa fa-th fa-fw"></i>分类</a></li><li class="menu-item menu-item-archives"><a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i>归档</a></li><li class="menu-item menu-item-about"><a href="/about/" rel="section"><i class="fa fa-user fa-fw"></i>关于</a></li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>搜索
+        </a>
+      </li>
+  </ul>
+</nav>
+
+
+
+  <div class="search-pop-overlay">
+    <div class="popup search-popup"><div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocapitalize="off" maxlength="80"
+           placeholder="搜索..." spellcheck="false"
+           type="search" class="search-input">
+  </div>
+  <span class="popup-btn-close" role="button">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div class="search-result-container no-result">
+  <div class="search-result-icon">
+    <i class="fa fa-spinner fa-pulse fa-5x"></i>
+  </div>
+</div>
+
+    </div>
+  </div>
+
+</header>
+        
+  
+  <aside class="sidebar">
+
+    <div class="sidebar-inner sidebar-nav-active sidebar-toc-active">
+      <ul class="sidebar-nav">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <div class="sidebar-panel-container">
+        <!--noindex-->
+        <div class="post-toc-wrap sidebar-panel">
+            <div class="post-toc animated"><ol class="nav"><li class="nav-item nav-level-2"><a class="nav-link" href="#qemu%E4%B8%AD%E7%9A%84%E5%8D%8F%E7%A8%8B%E5%AE%9E%E7%8E%B0"><span class="nav-text">qemu中的协程实现</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#qemu%E4%B8%AD%E5%AF%B9%E5%8D%8F%E7%A8%8B%E7%9A%84%E4%BD%BF%E7%94%A8"><span class="nav-text">qemu中对协程的使用</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#%E5%8F%82%E8%80%83"><span class="nav-text">参考</span></a></li></ol></div>
+        </div>
+        <!--/noindex-->
+
+        <div class="site-overview-wrap sidebar-panel">
+          <div class="site-author animated" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">yklee</p>
+  <div class="site-description" itemprop="description">技术分享博客。内容涵盖linux内核、虚拟化、云原生等内容</div>
+</div>
+<div class="site-state-wrap animated">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+        <a href="/archives/">
+          <span class="site-state-item-count">2</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+          <a href="/categories/">
+        <span class="site-state-item-count">1</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+          <a href="/tags/">
+        <span class="site-state-item-count">2</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+
+        </div>
+      </div>
+    </div>
+
+    
+  </aside>
+
+
+    </div>
+
+    <div class="main-inner post posts-expand">
+
+
+  
+
+
+<div class="post-block">
+  
+  
+
+  <article itemscope itemtype="http://schema.org/Article" class="post-content" lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="http://example.com/2024/06/12/qemu-coroutine/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="yklee">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="yklee's blog">
+      <meta itemprop="description" content="技术分享博客。内容涵盖linux内核、虚拟化、云原生等内容">
+    </span>
+
+    <span hidden itemprop="post" itemscope itemtype="http://schema.org/CreativeWork">
+      <meta itemprop="name" content="QEMU分析之协程 | yklee's blog">
+      <meta itemprop="description" content="">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          QEMU分析之协程
+        </h1>
+
+        <div class="post-meta-container">
+          <div class="post-meta">
+    <span class="post-meta-item">
+      <span class="post-meta-item-icon">
+        <i class="far fa-calendar"></i>
+      </span>
+      <span class="post-meta-item-text">发表于</span>
+      
+
+      <time title="创建时间：2024-06-12 22:33:06 / 修改时间：22:41:53" itemprop="dateCreated datePublished" datetime="2024-06-12T22:33:06+08:00">2024-06-12</time>
+    </span>
+    <span class="post-meta-item">
+      <span class="post-meta-item-icon">
+        <i class="far fa-folder"></i>
+      </span>
+      <span class="post-meta-item-text">分类于</span>
+        <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+          <a href="/categories/%E8%99%9A%E6%8B%9F%E5%8C%96/" itemprop="url" rel="index"><span itemprop="name">虚拟化</span></a>
+        </span>
+    </span>
+
+  
+</div>
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody"><p>协程类似于线程，也是一个调度的实体。<span id="more"></span> 但是不同的是：进程或者线程在切换时需要进行上下文切换，这需要内核的调度器来做换入换出；而协程是一个用户态的调度实体，需要自身主动放弃执行来实现切换。</p>
+<h2 id="qemu中的协程实现"><a href="#qemu中的协程实现" class="headerlink" title="qemu中的协程实现"></a>qemu中的协程实现</h2><p>qemu的协程依赖于setjmp和ucontext两个组件，其中 setjmp 实现协程间的切换，ucontext 实现协程栈空间的创建。主要应用在block io、磁盘镜像操作等异步操作中。</p>
+<blockquote>
+<p>  关于这两个组件的详细介绍可以参考<a target="_blank" rel="noopener" href="https://www.binss.me/blog/qemu-note-of-coroutine/">https://www.binss.me/blog/qemu-note-of-coroutine/</a>。这里不关注具体的实现原理。</p>
+</blockquote>
+<p>协程之间的切换主要靠下面三个函数完成的：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">qemu_coroutine_create: 创建一个协程</span><br><span class="line">qemu_coroutine_enter: 从当前执行流（协程或线程）切换到指定的协程</span><br><span class="line">qemu_coroutine_yield: 让出当前协程的执行权，返回到该协程被创建或者最近一次被qemu_coroutine_enter调用的上下文中。</span><br></pre></td></tr></table></figure>
+
+<p>在调用<code>qemu_coroutine_yield</code>时，当前协程的上下文（比如程序计数器、栈等）会被保存下来，以便将来恢复执行。操作系统不会介入这个过程，都是在用户空间完成的。</p>
+<p>另外qemu_coroutine_self用于获得当前所处的协程。</p>
+<h2 id="qemu中对协程的使用"><a href="#qemu中对协程的使用" class="headerlink" title="qemu中对协程的使用"></a>qemu中对协程的使用</h2><p>这里分析一下热迁移中可能会用到协程的地方。</p>
+<p>假设热迁移流程process_imcoming_migration_co中还需要与另外一个组件建立连接（去连接一个服务端），并且需要等待连接建立完成。由于连接的建立一般是inet_nonblocking_connect中执行对应一个回调函数，因此可以：（1）在主线程中设置一个轮询函数一直检查连接状态；或者（2）在这之前将当前的co保存下来并传递给连接建立函数中。然后等待连接建立完成的循环中使用qemu_coroutine_yield，建立连接的回调函数中在连接完成后执行qemu_coroutine_enter。这样连接完成后就会直接跳到查询连接状态的地方来做后续的操作。</p>
+<blockquote>
+<p>  由于qemu的网络连接模型是异步的，所以上面的inet_nonblocking_connect -&gt; inet_connect_opts函数会立即返回，并不会等待连接建立完成，所以才需要提供一个回调函数。这也是为什么此处可以使用协程等待连接建立完成的原因。</p>
+</blockquote>
+<p>另外，在qemu比较新的代码中，socket_get_buffer对于nonblock模式的fd，规定必须在协程的上下文中。代码如下：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">int</span> <span class="title function_">socket_get_buffer</span><span class="params">(<span class="type">void</span> *opaque, <span class="type">uint8_t</span> *buf, <span class="type">int64_t</span> pos, <span class="type">int</span> size)</span></span><br><span class="line">&#123;</span><br><span class="line">    QEMUFileSocket *s = opaque;</span><br><span class="line">    <span class="type">ssize_t</span> len;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">for</span> (;;) &#123;</span><br><span class="line">        len = qemu_recv(s-&gt;fd, buf, size, <span class="number">0</span>);</span><br><span class="line">        <span class="keyword">if</span> (len != <span class="number">-1</span>) &#123;</span><br><span class="line">            <span class="keyword">break</span>;</span><br><span class="line">        &#125;</span><br><span class="line">        <span class="keyword">if</span> (socket_error() == EAGAIN) &#123;</span><br><span class="line">            yield_until_fd_readable(s-&gt;fd);</span><br><span class="line">        &#125; <span class="keyword">else</span> <span class="keyword">if</span> (socket_error() != EINTR) &#123;</span><br><span class="line">            <span class="keyword">break</span>;</span><br><span class="line">        &#125;</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">if</span> (len == <span class="number">-1</span>) &#123;</span><br><span class="line">        len = -socket_error();</span><br><span class="line">    &#125;</span><br><span class="line">    <span class="keyword">return</span> len;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<blockquote>
+<p>  据此再补充一点：关于上面的EAGAIN error的场景，一般都是只有非阻塞socket才会产生EAGAIN的错误，意思是当前不可读写需重试。但是在实际开发中可以发现，有时阻塞模式下也会返回EAGAIN。这是因为对阻塞模式的socket设置了超时机制（SO_RCVTIMEO或者SO_SNDTIMEO）。针对这个问题的分析可以参考：<a target="_blank" rel="noopener" href="https://blog.csdn.net/cleanfield/article/details/41649985">https://blog.csdn.net/cleanfield/article/details/41649985</a></p>
+</blockquote>
+<h2 id="参考"><a href="#参考" class="headerlink" title="参考"></a>参考</h2><p><a target="_blank" rel="noopener" href="https://runsisi.com/2019/03/02/qemu-co/">https://runsisi.com/2019/03/02/qemu-co/</a></p>
+<p><a target="_blank" rel="noopener" href="https://www.binss.me/blog/qemu-note-of-coroutine/">https://www.binss.me/blog/qemu-note-of-coroutine/</a></p>
+
+    </div>
+
+    
+    
+    
+
+    <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/tags/QEMU/" rel="tag"># QEMU</a>
+              <a href="/tags/%E8%99%9A%E6%8B%9F%E5%8C%96/" rel="tag"># 虚拟化</a>
+          </div>
+
+        
+
+          <div class="post-nav">
+            <div class="post-nav-item">
+                <a href="/2024/06/07/qemufile/" rel="prev" title="QEMU分析之QEMUFile">
+                  <i class="fa fa-angle-left"></i> QEMU分析之QEMUFile
+                </a>
+            </div>
+            <div class="post-nav-item">
+            </div>
+          </div>
+    </footer>
+  </article>
+</div>
+
+
+
+
+
+
+</div>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+
+  <div class="copyright">
+    &copy; 
+    <span itemprop="copyrightYear">2024</span>
+    <span class="with-love">
+      <i class="fa fa-heart"></i>
+    </span>
+    <span class="author" itemprop="copyrightHolder">yklee</span>
+  </div>
+  <div class="powered-by">由 <a href="https://hexo.io/" rel="noopener" target="_blank">Hexo</a> & <a href="https://theme-next.js.org/" rel="noopener" target="_blank">NexT.Gemini</a> 强力驱动
+  </div>
+
+    </div>
+  </footer>
+
+  
+  <div class="toggle sidebar-toggle" role="button">
+    <span class="toggle-line"></span>
+    <span class="toggle-line"></span>
+    <span class="toggle-line"></span>
+  </div>
+  <div class="sidebar-dimmer"></div>
+  <div class="back-to-top" role="button" aria-label="返回顶部">
+    <i class="fa fa-arrow-up fa-lg"></i>
+    <span>0%</span>
+  </div>
+
+<noscript>
+  <div class="noscript-warning">Theme NexT works best with JavaScript enabled</div>
+</noscript>
+
+
+  
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js" integrity="sha256-XL2inqUJaslATFnHdJOi9GfQ60on8Wx1C2H8DYiN1xY=" crossorigin="anonymous"></script>
+<script src="/js/comments.js"></script><script src="/js/utils.js"></script><script src="/js/sidebar.js"></script><script src="/js/next-boot.js"></script>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/hexo-generator-searchdb/1.4.1/search.js" integrity="sha256-1kfA5uHPf65M5cphT2dvymhkuyHPQp5A53EGZOnOLmc=" crossorigin="anonymous"></script>
+<script src="/js/third-party/search/local-search.js"></script>
+
+
+
+
+
+
+
+  
+
+
+
+
+
+</body>
+</html>
