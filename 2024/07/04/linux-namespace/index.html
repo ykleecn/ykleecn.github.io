@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width">
+<meta name="theme-color" content="#222"><meta name="generator" content="Hexo 7.2.0">
+
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/blogger_1.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/blogger_1.png">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" integrity="sha256-XOqroi11tY4EFQMR9ZYwZWKj5ZXiftSx36RRuC3anlA=" crossorigin="anonymous">
+
+<script class="next-config" data-name="main" type="application/json">{"hostname":"example.com","root":"/","images":"/images","scheme":"Gemini","darkmode":false,"version":"8.20.0","exturl":false,"sidebar":{"position":"left","width_expanded":320,"width_dual_column":240,"display":"always       //在所有页面中都显示","padding":18,"offset":"12            //文章间距（只对Pisces | Gemini两种风格有效）","b2t":"false            //返回顶部按钮（只对Pisces | Gemini两种风格有效）","scrollpercent":"true   //返回顶部按钮的百分比"},"copycode":{"enable":false,"style":null},"fold":{"enable":false,"height":500},"bookmark":{"enable":false,"color":"#222","save":"auto"},"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"stickytabs":false,"motion":{"enable":false,"async":false,"transition":{"menu_item":"fadeInDown","post_block":"fadeIn","post_header":"fadeInDown","post_body":"fadeInDown","coll_header":"fadeInLeft","sidebar":"fadeInUp"}},"i18n":{"placeholder":"搜索...","empty":"没有找到任何搜索结果：${query}","hits_time":"找到 ${hits} 个搜索结果（用时 ${time} 毫秒）","hits":"找到 ${hits} 个搜索结果"},"path":"/search.xml","localsearch":{"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false}}</script><script src="/js/config.js"></script>
+
+    <meta name="description" content="linux namespace是对全局系统资源的一种封装隔离，使处于不同namespace的进程拥有独立的资源，作为一种轻量级的虚拟机，为容器的实现提供了非常重要的支撑。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="linux namespace 分析">
+<meta property="og:url" content="http://example.com/2024/07/04/linux-namespace/index.html">
+<meta property="og:site_name" content="yklee&#39;s blog">
+<meta property="og:description" content="linux namespace是对全局系统资源的一种封装隔离，使处于不同namespace的进程拥有独立的资源，作为一种轻量级的虚拟机，为容器的实现提供了非常重要的支撑。">
+<meta property="og:locale" content="zh_CN">
+<meta property="article:published_time" content="2024-07-03T16:58:30.000Z">
+<meta property="article:modified_time" content="2024-07-03T17:01:14.604Z">
+<meta property="article:author" content="yklee">
+<meta property="article:tag" content="Linux">
+<meta property="article:tag" content="docker">
+<meta name="twitter:card" content="summary">
+
+
+<link rel="canonical" href="http://example.com/2024/07/04/linux-namespace/">
+
+
+
+<script class="next-config" data-name="page" type="application/json">{"sidebar":"","isHome":false,"isPost":true,"lang":"zh-CN","comments":true,"permalink":"http://example.com/2024/07/04/linux-namespace/","path":"2024/07/04/linux-namespace/","title":"linux namespace 分析"}</script>
+
+<script class="next-config" data-name="calendar" type="application/json">""</script>
+<title>linux namespace 分析 | yklee's blog</title>
+  
+
+
+
+
+
+
+
+
+  <noscript>
+    <link rel="stylesheet" href="/css/noscript.css">
+  </noscript>
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="headband"></div>
+
+  <main class="main">
+    <div class="column">
+      <header class="header" itemscope itemtype="http://schema.org/WPHeader"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏" role="button">
+        <span class="toggle-line"></span>
+        <span class="toggle-line"></span>
+        <span class="toggle-line"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <i class="logo-line"></i>
+      <p class="site-title">yklee's blog</p>
+      <i class="logo-line"></i>
+    </a>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger" aria-label="搜索" role="button">
+        <i class="fa fa-search fa-fw fa-lg"></i>
+    </div>
+  </div>
+</div>
+
+
+
+<nav class="site-nav">
+  <ul class="main-menu menu"><li class="menu-item menu-item-home"><a href="/" rel="section"><i class="fa fa-home fa-fw"></i>首页</a></li><li class="menu-item menu-item-tags"><a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i>标签</a></li><li class="menu-item menu-item-categories"><a href="/categories/" rel="section"><i class="fa fa-th fa-fw"></i>分类</a></li><li class="menu-item menu-item-archives"><a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i>归档</a></li><li class="menu-item menu-item-about"><a href="/about/" rel="section"><i class="fa fa-user fa-fw"></i>关于</a></li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>搜索
+        </a>
+      </li>
+  </ul>
+</nav>
+
+
+
+  <div class="search-pop-overlay">
+    <div class="popup search-popup"><div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocapitalize="off" maxlength="80"
+           placeholder="搜索..." spellcheck="false"
+           type="search" class="search-input">
+  </div>
+  <span class="popup-btn-close" role="button">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div class="search-result-container no-result">
+  <div class="search-result-icon">
+    <i class="fa fa-spinner fa-pulse fa-5x"></i>
+  </div>
+</div>
+
+    </div>
+  </div>
+
+</header>
+        
+  
+  <aside class="sidebar">
+
+    <div class="sidebar-inner sidebar-nav-active sidebar-toc-active">
+      <ul class="sidebar-nav">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <div class="sidebar-panel-container">
+        <!--noindex-->
+        <div class="post-toc-wrap sidebar-panel">
+            <div class="post-toc animated"><ol class="nav"><li class="nav-item nav-level-2"><a class="nav-link" href="#1-%E5%9F%BA%E7%A1%80%E7%BB%93%E6%9E%84%E5%88%86%E6%9E%90"><span class="nav-text">1. 基础结构分析</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#2-%E5%90%84%E4%B8%AAnamespace%E7%9A%84%E5%88%9B%E5%BB%BA%E4%B8%8E%E5%88%9D%E5%A7%8B%E5%8C%96"><span class="nav-text">2. 各个namespace的创建与初始化</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#2-1-%E5%88%9B%E5%BB%BA%E6%96%B0%E7%9A%84namespace"><span class="nav-text">2.1 创建新的namespace</span></a></li></ol></li><li class="nav-item nav-level-2"><a class="nav-link" href="#%E5%8F%82%E8%80%83%E9%93%BE%E6%8E%A5"><span class="nav-text">参考链接</span></a></li></ol></div>
+        </div>
+        <!--/noindex-->
+
+        <div class="site-overview-wrap sidebar-panel">
+          <div class="site-author animated" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">yklee</p>
+  <div class="site-description" itemprop="description">技术分享博客。内容涵盖linux内核、虚拟化、云原生等内容</div>
+</div>
+<div class="site-state-wrap animated">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+        <a href="/archives/">
+          <span class="site-state-item-count">6</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+          <a href="/categories/">
+        <span class="site-state-item-count">3</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+          <a href="/tags/">
+        <span class="site-state-item-count">5</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+
+        </div>
+      </div>
+    </div>
+
+    
+  </aside>
+
+
+    </div>
+
+    <div class="main-inner post posts-expand">
+
+
+  
+
+
+<div class="post-block">
+  
+  
+
+  <article itemscope itemtype="http://schema.org/Article" class="post-content" lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="http://example.com/2024/07/04/linux-namespace/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="yklee">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="yklee's blog">
+      <meta itemprop="description" content="技术分享博客。内容涵盖linux内核、虚拟化、云原生等内容">
+    </span>
+
+    <span hidden itemprop="post" itemscope itemtype="http://schema.org/CreativeWork">
+      <meta itemprop="name" content="linux namespace 分析 | yklee's blog">
+      <meta itemprop="description" content="">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          linux namespace 分析
+        </h1>
+
+        <div class="post-meta-container">
+          <div class="post-meta">
+    <span class="post-meta-item">
+      <span class="post-meta-item-icon">
+        <i class="far fa-calendar"></i>
+      </span>
+      <span class="post-meta-item-text">发表于</span>
+      
+
+      <time title="创建时间：2024-07-04 00:58:30 / 修改时间：01:01:14" itemprop="dateCreated datePublished" datetime="2024-07-04T00:58:30+08:00">2024-07-04</time>
+    </span>
+    <span class="post-meta-item">
+      <span class="post-meta-item-icon">
+        <i class="far fa-folder"></i>
+      </span>
+      <span class="post-meta-item-text">分类于</span>
+        <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+          <a href="/categories/Linux/" itemprop="url" rel="index"><span itemprop="name">Linux</span></a>
+        </span>
+    </span>
+
+  
+</div>
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody"><p>linux namespace是对全局系统资源的一种封装隔离，使处于不同namespace的进程拥有独立的资源，作为一种轻量级的虚拟机，为容器的实现提供了非常重要的支撑。</p>
+<span id="more"></span>
+
+<blockquote>
+<p>  以下代码基于linux 4.19</p>
+</blockquote>
+<h2 id="1-基础结构分析"><a href="#1-基础结构分析" class="headerlink" title="1. 基础结构分析"></a>1. 基础结构分析</h2><p>linux的进程是以task_struct结构体控制的，所以里面有一个nsproxy的变量，就是跟namespace有关。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">task_struct</span> &#123;</span></span><br><span class="line">  <span class="comment">// ...</span></span><br><span class="line">  <span class="comment">/* Namespaces: */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">nsproxy</span>			*<span class="title">nsproxy</span>;</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>nsproxy结构体就定义了namespace以及一些操作函数：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">nsproxy</span> &#123;</span></span><br><span class="line">	<span class="type">atomic_t</span> count; <span class="comment">// 引用计数</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">uts_namespace</span> *<span class="title">uts_ns</span>;</span> <span class="comment">// 隔离主机和域名信息。隔离了 uname() 系统调用返回的两个系统标识符 nodename 和 domainname.</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">ipc_namespace</span> *<span class="title">ipc_ns</span>;</span> <span class="comment">// 使划分到不同IPC Namespace 的进程组通信上隔离，无法通过消息队列、共享内存、信号量方式通信</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">mnt_namespace</span> *<span class="title">mnt_ns</span>;</span> <span class="comment">// 指向的是已经装载的文件系统的视图，隔离了一组进程所看到的文件系统挂载点的集合</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">pid_namespace</span> *<span class="title">pid_ns_for_children</span>;</span> <span class="comment">// 隔离了进程ID空间，不同的 PID Namespace 中的进程可以拥有相同的 PID。</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">net</span> 	     *<span class="title">net_ns</span>;</span> <span class="comment">// 网络相关，每个 Network Namespace 都有自己的网络设备、IP地址、IP路由表、/proc/net目录、端口号等。</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_namespace</span> *<span class="title">cgroup_ns</span>;</span> <span class="comment">// cgroup相关</span></span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 对应的在clone中传入的参数如下：</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CLONE_NEWCGROUP		0x02000000	<span class="comment">/* New cgroup namespace */</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CLONE_NEWUTS		0x04000000	<span class="comment">/* New utsname namespace */</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CLONE_NEWIPC		0x08000000	<span class="comment">/* New ipc namespace */</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CLONE_NEWUSER		0x10000000	<span class="comment">/* New user namespace */</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CLONE_NEWPID		0x20000000	<span class="comment">/* New pid namespace */</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CLONE_NEWNET		0x40000000	<span class="comment">/* New network namespace */</span></span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 一些对namespace的操作</span></span><br><span class="line"><span class="type">int</span> <span class="title function_">copy_namespaces</span><span class="params">(<span class="type">unsigned</span> <span class="type">long</span> flags, <span class="keyword">struct</span> task_struct *tsk)</span>;</span><br><span class="line"><span class="type">void</span> <span class="title function_">exit_task_namespaces</span><span class="params">(<span class="keyword">struct</span> task_struct *tsk)</span>;</span><br><span class="line"><span class="type">void</span> <span class="title function_">switch_task_namespaces</span><span class="params">(<span class="keyword">struct</span> task_struct *tsk, <span class="keyword">struct</span> nsproxy *new)</span>;</span><br><span class="line"><span class="type">void</span> <span class="title function_">free_nsproxy</span><span class="params">(<span class="keyword">struct</span> nsproxy *ns)</span>;</span><br><span class="line"><span class="type">int</span> <span class="title function_">unshare_nsproxy_namespaces</span><span class="params">(<span class="type">unsigned</span> <span class="type">long</span>, <span class="keyword">struct</span> nsproxy **,</span></span><br><span class="line"><span class="params"> <span class="keyword">struct</span> fs_struct *)</span>;</span><br></pre></td></tr></table></figure>
+
+<p>这个结构是被所有 namespace 所共享的，只要一个 namespace 被 clone 了，nsproxy 也会被 clone。</p>
+<p>上面这些资源对应各自的系统调用函数和参数，通过传输相应的参数，调用clone函数来完成。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">int</span> <span class="title function_">clone</span><span class="params">(<span class="type">int</span> (*child_func)(<span class="type">void</span> *), <span class="type">void</span> *child_stack, <span class="type">int</span> flags, <span class="type">void</span> *arg)</span>;</span><br></pre></td></tr></table></figure>
+
+<p>通过调用 clone()，并传入需要隔离资源对应的参数，就可以建立一个容器了（隔离什么我们自己控制）。一个容器进程也可以再 clone() 出一个容器进程，这是容器的嵌套。</p>
+<p>参考<a target="_blank" rel="noopener" href="https://www.cnblogs.com/bakari/p/8560437.html">Docker 基础技术之 Linux namespace 详解 </a> ，一个简单的容器启动方法如下：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> _GNU_SOURCE</span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;sys/types.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;sys/wait.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;stdio.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;sched.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;signal.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;unistd.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> STACK_SIZE (1024 * 1024)</span></span><br><span class="line"></span><br><span class="line"><span class="type">static</span> <span class="type">char</span> container_stack[STACK_SIZE];</span><br><span class="line"><span class="type">char</span>* <span class="type">const</span> container_args[] = &#123;</span><br><span class="line">   <span class="string">&quot;/bin/bash&quot;</span>,</span><br><span class="line">   <span class="literal">NULL</span></span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 容器进程运行的程序主函数</span></span><br><span class="line"><span class="type">int</span> <span class="title function_">container_main</span><span class="params">(<span class="type">void</span> *args)</span></span><br><span class="line">&#123;</span><br><span class="line">   <span class="built_in">printf</span>(<span class="string">&quot;在容器进程中！\n&quot;</span>);</span><br><span class="line">   execv(container_args[<span class="number">0</span>], container_args); <span class="comment">// 执行/bin/bash   return 1;</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="type">int</span> <span class="title function_">main</span><span class="params">(<span class="type">int</span> args, <span class="type">char</span> *argv[])</span></span><br><span class="line">&#123;</span><br><span class="line">   <span class="built_in">printf</span>(<span class="string">&quot;程序开始\n&quot;</span>);</span><br><span class="line">   <span class="comment">// clone 容器进程</span></span><br><span class="line">   <span class="type">int</span> container_pid = clone(container_main, container_stack + STACK_SIZE, SIGCHLD | CLNOE_XXX, <span class="literal">NULL</span>); <span class="comment">// CLNOE_XXX根据需要|一下</span></span><br><span class="line">   <span class="comment">// 等待容器进程结束</span></span><br><span class="line">   waitpid(container_pid, <span class="literal">NULL</span>, <span class="number">0</span>);</span><br><span class="line">   <span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>如果想要查看当前进程下有哪些 namespace 隔离，可以查看文件 &#x2F;proc&#x2F;[pid]&#x2F;ns。如果两个进程指向的ns号相同，说明在同一个ns下。</p>
+<figure class="highlight bash"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">[root@yk-centos ~]<span class="comment"># ls -l /proc/7307/ns/</span></span><br><span class="line">总用量 0</span><br><span class="line">lrwxrwxrwx 1 root root 0 6月  29 16:07 ipc -&gt; ipc:[4026531839]</span><br><span class="line">lrwxrwxrwx 1 root root 0 6月  29 16:07 mnt -&gt; mnt:[4026531840]</span><br><span class="line">lrwxrwxrwx 1 root root 0 6月   7 12:49 net -&gt; net:[4026531956]</span><br><span class="line">lrwxrwxrwx 1 root root 0 6月   7 12:49 pid -&gt; pid:[4026531836]</span><br><span class="line">lrwxrwxrwx 1 root root 0 6月  29 16:07 user -&gt; user:[4026531837]</span><br><span class="line">lrwxrwxrwx 1 root root 0 6月  29 16:07 uts -&gt; uts:[4026531838]</span><br></pre></td></tr></table></figure>
+
+<h2 id="2-各个namespace的创建与初始化"><a href="#2-各个namespace的创建与初始化" class="headerlink" title="2. 各个namespace的创建与初始化"></a>2. 各个namespace的创建与初始化</h2><p>在各个namespace结构定义下都有一个init函数，nsproxy也有一个init_nsproxy函数，这个函数在task初始化的时候就会被调用，而init_nsproxy定义了关于具体几个namespace的初始化</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">task_struct</span> <span class="title">init_task</span></span></span><br><span class="line"><span class="class">&#123;</span></span><br><span class="line">  	.nsproxy	= &amp;init_nsproxy,</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">struct</span> nsproxy init_nsproxy = &#123;</span><br><span class="line">	.count			= ATOMIC_INIT(<span class="number">1</span>),</span><br><span class="line">	.uts_ns			= &amp;init_uts_ns,</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> defined(CONFIG_POSIX_MQUEUE) || defined(CONFIG_SYSVIPC)</span></span><br><span class="line">	.ipc_ns			= &amp;init_ipc_ns,</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">	.mnt_ns			= <span class="literal">NULL</span>,</span><br><span class="line">	.pid_ns_for_children	= &amp;init_pid_ns,</span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> CONFIG_NET</span></span><br><span class="line">	.net_ns			= &amp;init_net,</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> CONFIG_CGROUPS</span></span><br><span class="line">	.cgroup_ns		= &amp;init_cgroup_ns,</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-1-创建新的namespace"><a href="#2-1-创建新的namespace" class="headerlink" title="2.1 创建新的namespace"></a>2.1 创建新的namespace</h3><p>linux是通过clone函数来创建namespace的，另外fork、vfork也对clone进行了封装（一般不指定的话是不需要新建namespace的）。接下来以fork方式做简单的分析是怎么新建一个namespace的。</p>
+<p>fork&#x2F;vfork最终都会调用到_do_fork函数，该函数的一个形参就是clone_flags</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">long</span> _do_fork(<span class="type">unsigned</span> <span class="type">long</span> clone_flags, <span class="comment">// 与clone和namespace有关</span></span><br><span class="line">	      <span class="type">unsigned</span> <span class="type">long</span> stack_start,</span><br><span class="line">	      <span class="type">unsigned</span> <span class="type">long</span> stack_size,</span><br><span class="line">	      <span class="type">int</span> __user *parent_tidptr,</span><br><span class="line">	      <span class="type">int</span> __user *child_tidptr,</span><br><span class="line">	      <span class="type">unsigned</span> <span class="type">long</span> tls)</span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">task_struct</span> *<span class="title">p</span>;</span></span><br><span class="line"> 	p = copy_process(clone_flags, stack_start, stack_size,</span><br><span class="line">			 child_tidptr, <span class="literal">NULL</span>, trace, tls, NUMA_NO_NODE);</span><br><span class="line">    </span><br><span class="line">    pid = get_task_pid(p, PIDTYPE_PID);</span><br><span class="line">    <span class="comment">// 调用 vfork() 方法，完成相关的初始化工作  </span></span><br><span class="line">    <span class="keyword">if</span> (clone_flags &amp; CLONE_VFORK) &#123;</span><br><span class="line">		p-&gt;vfork_done = &amp;vfork;</span><br><span class="line">		init_completion(&amp;vfork);</span><br><span class="line">         get_task_struct(p);</span><br><span class="line">   	&#125;</span><br><span class="line"></span><br><span class="line">   	<span class="comment">// 将新进程加入到调度器中，为其分配 CPU，准备执行</span></span><br><span class="line">   	wake_up_new_task(p);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里面比较重要的就是copy_process将父进程的信息复制给子进程。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> __latent_entropy <span class="keyword">struct</span> task_struct *<span class="title function_">copy_process</span><span class="params">()</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 校验几个flag是不是正确的，是不是可以兼容</span></span><br><span class="line">    <span class="comment">// 初始化task_struct，并分配 CPU，进程状态设置为 TASK_RUNNING</span></span><br><span class="line">    retval = sched_fork(clone_flags, p);</span><br><span class="line">    <span class="comment">// 复制所有进程信息，包括文件系统，信号处理函数、信号、内存管理等</span></span><br><span class="line">    shm_init_task(p);</span><br><span class="line">    ...</span><br><span class="line">    <span class="comment">// 复制namespace</span></span><br><span class="line">    retval = copy_namespaces(clone_flags, p);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="type">int</span> <span class="title function_">copy_namespaces</span><span class="params">(<span class="type">unsigned</span> <span class="type">long</span> flags, <span class="keyword">struct</span> task_struct *tsk)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="comment">// 没有特殊标志的话，是直接复用之间的ns的</span></span><br><span class="line">    <span class="keyword">if</span> (likely(!(flags &amp; (CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC |</span><br><span class="line">			      CLONE_NEWPID | CLONE_NEWNET |</span><br><span class="line">			      CLONE_NEWCGROUP)))) &#123;</span><br><span class="line">		get_nsproxy(old_ns);</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">	&#125;</span><br><span class="line">    </span><br><span class="line">    new_ns = create_new_namespaces(flags, tsk, user_ns, tsk-&gt;fs);</span><br><span class="line">    tsk-&gt;nsproxy = new_ns;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<h2 id="参考链接"><a href="#参考链接" class="headerlink" title="参考链接"></a>参考链接</h2><p><a target="_blank" rel="noopener" href="https://cloud.tencent.com/developer/article/2129136">https://cloud.tencent.com/developer/article/2129136</a></p>
+<p><a target="_blank" rel="noopener" href="https://blog.csdn.net/summer_fish/article/details/134437688">https://blog.csdn.net/summer_fish/article/details/134437688</a></p>
+<p><a target="_blank" rel="noopener" href="https://www.cnblogs.com/bakari/p/8560437.html">Docker 基础技术之 Linux namespace 详解 </a></p>
+<p><a target="_blank" rel="noopener" href="https://www.cnblogs.com/bakari/p/8823642.html">Docker 基础技术之 Linux namespace 源码分析</a></p>
+
+    </div>
+
+    
+    
+    
+
+    <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/tags/Linux/" rel="tag"># Linux</a>
+              <a href="/tags/docker/" rel="tag"># docker</a>
+          </div>
+
+        
+
+          <div class="post-nav">
+            <div class="post-nav-item">
+                <a href="/2024/06/13/linux-dma-overview/" rel="prev" title="Linux DMA 简介">
+                  <i class="fa fa-angle-left"></i> Linux DMA 简介
+                </a>
+            </div>
+            <div class="post-nav-item">
+                <a href="/2024/07/04/linux-cgroup/" rel="next" title="linux cgroup 分析">
+                  linux cgroup 分析 <i class="fa fa-angle-right"></i>
+                </a>
+            </div>
+          </div>
+    </footer>
+  </article>
+</div>
+
+
+
+
+
+
+</div>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+
+  <div class="copyright">
+    &copy; 
+    <span itemprop="copyrightYear">2024</span>
+    <span class="with-love">
+      <i class="fa fa-heart"></i>
+    </span>
+    <span class="author" itemprop="copyrightHolder">yklee</span>
+  </div>
+  <div class="powered-by">由 <a href="https://hexo.io/" rel="noopener" target="_blank">Hexo</a> & <a href="https://theme-next.js.org/" rel="noopener" target="_blank">NexT.Gemini</a> 强力驱动
+  </div>
+
+    </div>
+  </footer>
+
+  
+  <div class="toggle sidebar-toggle" role="button">
+    <span class="toggle-line"></span>
+    <span class="toggle-line"></span>
+    <span class="toggle-line"></span>
+  </div>
+  <div class="sidebar-dimmer"></div>
+  <div class="back-to-top" role="button" aria-label="返回顶部">
+    <i class="fa fa-arrow-up fa-lg"></i>
+    <span>0%</span>
+  </div>
+
+<noscript>
+  <div class="noscript-warning">Theme NexT works best with JavaScript enabled</div>
+</noscript>
+
+
+  
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js" integrity="sha256-XL2inqUJaslATFnHdJOi9GfQ60on8Wx1C2H8DYiN1xY=" crossorigin="anonymous"></script>
+<script src="/js/comments.js"></script><script src="/js/utils.js"></script><script src="/js/sidebar.js"></script><script src="/js/next-boot.js"></script>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/hexo-generator-searchdb/1.4.1/search.js" integrity="sha256-1kfA5uHPf65M5cphT2dvymhkuyHPQp5A53EGZOnOLmc=" crossorigin="anonymous"></script>
+<script src="/js/third-party/search/local-search.js"></script>
+
+
+
+
+
+
+
+  
+
+
+
+
+
+</body>
+</html>

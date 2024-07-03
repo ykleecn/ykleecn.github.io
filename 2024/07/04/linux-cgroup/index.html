@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width">
+<meta name="theme-color" content="#222"><meta name="generator" content="Hexo 7.2.0">
+
+  <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon-next.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/images/blogger_1.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/images/blogger_1.png">
+  <link rel="mask-icon" href="/images/logo.svg" color="#222">
+
+<link rel="stylesheet" href="/css/main.css">
+
+
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" integrity="sha256-XOqroi11tY4EFQMR9ZYwZWKj5ZXiftSx36RRuC3anlA=" crossorigin="anonymous">
+
+<script class="next-config" data-name="main" type="application/json">{"hostname":"example.com","root":"/","images":"/images","scheme":"Gemini","darkmode":false,"version":"8.20.0","exturl":false,"sidebar":{"position":"left","width_expanded":320,"width_dual_column":240,"display":"always       //在所有页面中都显示","padding":18,"offset":"12            //文章间距（只对Pisces | Gemini两种风格有效）","b2t":"false            //返回顶部按钮（只对Pisces | Gemini两种风格有效）","scrollpercent":"true   //返回顶部按钮的百分比"},"copycode":{"enable":false,"style":null},"fold":{"enable":false,"height":500},"bookmark":{"enable":false,"color":"#222","save":"auto"},"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"stickytabs":false,"motion":{"enable":false,"async":false,"transition":{"menu_item":"fadeInDown","post_block":"fadeIn","post_header":"fadeInDown","post_body":"fadeInDown","coll_header":"fadeInLeft","sidebar":"fadeInUp"}},"i18n":{"placeholder":"搜索...","empty":"没有找到任何搜索结果：${query}","hits_time":"找到 ${hits} 个搜索结果（用时 ${time} 毫秒）","hits":"找到 ${hits} 个搜索结果"},"path":"/search.xml","localsearch":{"enable":true,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false}}</script><script src="/js/config.js"></script>
+
+    <meta name="description" content="cgroups是Linux下控制一个（或一组）进程的资源（CPU、内存、网络等）限制机制，全称是control groups，可以对cpu、内存等资源做精细化控制。可以说，cgroup是docker的基础。">
+<meta property="og:type" content="article">
+<meta property="og:title" content="linux cgroup 分析">
+<meta property="og:url" content="http://example.com/2024/07/04/linux-cgroup/index.html">
+<meta property="og:site_name" content="yklee&#39;s blog">
+<meta property="og:description" content="cgroups是Linux下控制一个（或一组）进程的资源（CPU、内存、网络等）限制机制，全称是control groups，可以对cpu、内存等资源做精细化控制。可以说，cgroup是docker的基础。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/images/202406231909174.png">
+<meta property="og:image" content="http://example.com/images/202406231916784.png">
+<meta property="og:image" content="http://example.com/images/202406232141639.png">
+<meta property="article:published_time" content="2024-07-03T17:03:33.000Z">
+<meta property="article:modified_time" content="2024-07-03T17:27:48.614Z">
+<meta property="article:author" content="yklee">
+<meta property="article:tag" content="Linux">
+<meta property="article:tag" content="docker">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/images/202406231909174.png">
+
+
+<link rel="canonical" href="http://example.com/2024/07/04/linux-cgroup/">
+
+
+
+<script class="next-config" data-name="page" type="application/json">{"sidebar":"","isHome":false,"isPost":true,"lang":"zh-CN","comments":true,"permalink":"http://example.com/2024/07/04/linux-cgroup/","path":"2024/07/04/linux-cgroup/","title":"linux cgroup 分析"}</script>
+
+<script class="next-config" data-name="calendar" type="application/json">""</script>
+<title>linux cgroup 分析 | yklee's blog</title>
+  
+
+
+
+
+
+
+
+
+  <noscript>
+    <link rel="stylesheet" href="/css/noscript.css">
+  </noscript>
+</head>
+
+<body itemscope itemtype="http://schema.org/WebPage">
+  <div class="headband"></div>
+
+  <main class="main">
+    <div class="column">
+      <header class="header" itemscope itemtype="http://schema.org/WPHeader"><div class="site-brand-container">
+  <div class="site-nav-toggle">
+    <div class="toggle" aria-label="切换导航栏" role="button">
+        <span class="toggle-line"></span>
+        <span class="toggle-line"></span>
+        <span class="toggle-line"></span>
+    </div>
+  </div>
+
+  <div class="site-meta">
+
+    <a href="/" class="brand" rel="start">
+      <i class="logo-line"></i>
+      <p class="site-title">yklee's blog</p>
+      <i class="logo-line"></i>
+    </a>
+  </div>
+
+  <div class="site-nav-right">
+    <div class="toggle popup-trigger" aria-label="搜索" role="button">
+        <i class="fa fa-search fa-fw fa-lg"></i>
+    </div>
+  </div>
+</div>
+
+
+
+<nav class="site-nav">
+  <ul class="main-menu menu"><li class="menu-item menu-item-home"><a href="/" rel="section"><i class="fa fa-home fa-fw"></i>首页</a></li><li class="menu-item menu-item-tags"><a href="/tags/" rel="section"><i class="fa fa-tags fa-fw"></i>标签</a></li><li class="menu-item menu-item-categories"><a href="/categories/" rel="section"><i class="fa fa-th fa-fw"></i>分类</a></li><li class="menu-item menu-item-archives"><a href="/archives/" rel="section"><i class="fa fa-archive fa-fw"></i>归档</a></li><li class="menu-item menu-item-about"><a href="/about/" rel="section"><i class="fa fa-user fa-fw"></i>关于</a></li>
+      <li class="menu-item menu-item-search">
+        <a role="button" class="popup-trigger"><i class="fa fa-search fa-fw"></i>搜索
+        </a>
+      </li>
+  </ul>
+</nav>
+
+
+
+  <div class="search-pop-overlay">
+    <div class="popup search-popup"><div class="search-header">
+  <span class="search-icon">
+    <i class="fa fa-search"></i>
+  </span>
+  <div class="search-input-container">
+    <input autocomplete="off" autocapitalize="off" maxlength="80"
+           placeholder="搜索..." spellcheck="false"
+           type="search" class="search-input">
+  </div>
+  <span class="popup-btn-close" role="button">
+    <i class="fa fa-times-circle"></i>
+  </span>
+</div>
+<div class="search-result-container no-result">
+  <div class="search-result-icon">
+    <i class="fa fa-spinner fa-pulse fa-5x"></i>
+  </div>
+</div>
+
+    </div>
+  </div>
+
+</header>
+        
+  
+  <aside class="sidebar">
+
+    <div class="sidebar-inner sidebar-nav-active sidebar-toc-active">
+      <ul class="sidebar-nav">
+        <li class="sidebar-nav-toc">
+          文章目录
+        </li>
+        <li class="sidebar-nav-overview">
+          站点概览
+        </li>
+      </ul>
+
+      <div class="sidebar-panel-container">
+        <!--noindex-->
+        <div class="post-toc-wrap sidebar-panel">
+            <div class="post-toc animated"><ol class="nav"><li class="nav-item nav-level-2"><a class="nav-link" href="#1-cgroup%E6%95%B4%E4%BD%93%E6%9E%B6%E6%9E%84%E5%92%8C%E7%BB%93%E6%9E%84%E4%BD%93%E5%88%86%E6%9E%90"><span class="nav-text">1. cgroup整体架构和结构体分析</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#2-cgroup%E7%9A%84%E5%88%9D%E5%A7%8B%E5%8C%96"><span class="nav-text">2. cgroup的初始化</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#2-1-cgroup-init-early"><span class="nav-text">2.1 cgroup_init_early</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#2-2-cgroup-init"><span class="nav-text">2.2 cgroup_init</span></a></li></ol></li><li class="nav-item nav-level-2"><a class="nav-link" href="#3-%E5%AD%90%E7%B3%BB%E7%BB%9F%E7%9A%84%E5%AE%9E%E7%8E%B0"><span class="nav-text">3. 子系统的实现</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#3-0-%E5%AD%90%E7%B3%BB%E7%BB%9F%E7%9A%84%E5%88%9B%E5%BB%BA%E4%BB%A5%E5%8F%8A%E8%BF%9B%E7%A8%8B%E7%9A%84%E5%8A%A0%E5%85%A5"><span class="nav-text">3.0 子系统的创建以及进程的加入</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#3-1-cpu%E5%AD%90%E7%B3%BB%E7%BB%9F"><span class="nav-text">3.1 cpu子系统</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#3-2-%E5%86%85%E5%AD%98%E5%AD%90%E7%B3%BB%E7%BB%9F"><span class="nav-text">3.2 内存子系统</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#3-3-cpuset%E5%AD%90%E7%B3%BB%E7%BB%9F"><span class="nav-text">3.3 cpuset子系统</span></a></li></ol></li><li class="nav-item nav-level-2"><a class="nav-link" href="#4-%E8%99%9A%E6%8B%9F%E5%8C%96%E5%92%8C%E5%AE%B9%E5%99%A8%E5%AF%B9cgroup%E7%9A%84%E4%BD%BF%E7%94%A8"><span class="nav-text">4. 虚拟化和容器对cgroup的使用</span></a></li><li class="nav-item nav-level-2"><a class="nav-link" href="#%E5%8F%82%E8%80%83%E9%93%BE%E6%8E%A5"><span class="nav-text">参考链接</span></a></li></ol></div>
+        </div>
+        <!--/noindex-->
+
+        <div class="site-overview-wrap sidebar-panel">
+          <div class="site-author animated" itemprop="author" itemscope itemtype="http://schema.org/Person">
+  <p class="site-author-name" itemprop="name">yklee</p>
+  <div class="site-description" itemprop="description">技术分享博客。内容涵盖linux内核、虚拟化、云原生等内容</div>
+</div>
+<div class="site-state-wrap animated">
+  <nav class="site-state">
+      <div class="site-state-item site-state-posts">
+        <a href="/archives/">
+          <span class="site-state-item-count">6</span>
+          <span class="site-state-item-name">日志</span>
+        </a>
+      </div>
+      <div class="site-state-item site-state-categories">
+          <a href="/categories/">
+        <span class="site-state-item-count">3</span>
+        <span class="site-state-item-name">分类</span></a>
+      </div>
+      <div class="site-state-item site-state-tags">
+          <a href="/tags/">
+        <span class="site-state-item-count">5</span>
+        <span class="site-state-item-name">标签</span></a>
+      </div>
+  </nav>
+</div>
+
+        </div>
+      </div>
+    </div>
+
+    
+  </aside>
+
+
+    </div>
+
+    <div class="main-inner post posts-expand">
+
+
+  
+
+
+<div class="post-block">
+  
+  
+
+  <article itemscope itemtype="http://schema.org/Article" class="post-content" lang="zh-CN">
+    <link itemprop="mainEntityOfPage" href="http://example.com/2024/07/04/linux-cgroup/">
+
+    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
+      <meta itemprop="image" content="/images/avatar.gif">
+      <meta itemprop="name" content="yklee">
+    </span>
+
+    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
+      <meta itemprop="name" content="yklee's blog">
+      <meta itemprop="description" content="技术分享博客。内容涵盖linux内核、虚拟化、云原生等内容">
+    </span>
+
+    <span hidden itemprop="post" itemscope itemtype="http://schema.org/CreativeWork">
+      <meta itemprop="name" content="linux cgroup 分析 | yklee's blog">
+      <meta itemprop="description" content="">
+    </span>
+      <header class="post-header">
+        <h1 class="post-title" itemprop="name headline">
+          linux cgroup 分析
+        </h1>
+
+        <div class="post-meta-container">
+          <div class="post-meta">
+    <span class="post-meta-item">
+      <span class="post-meta-item-icon">
+        <i class="far fa-calendar"></i>
+      </span>
+      <span class="post-meta-item-text">发表于</span>
+      
+
+      <time title="创建时间：2024-07-04 01:03:33 / 修改时间：01:27:48" itemprop="dateCreated datePublished" datetime="2024-07-04T01:03:33+08:00">2024-07-04</time>
+    </span>
+    <span class="post-meta-item">
+      <span class="post-meta-item-icon">
+        <i class="far fa-folder"></i>
+      </span>
+      <span class="post-meta-item-text">分类于</span>
+        <span itemprop="about" itemscope itemtype="http://schema.org/Thing">
+          <a href="/categories/Linux/" itemprop="url" rel="index"><span itemprop="name">Linux</span></a>
+        </span>
+    </span>
+
+  
+</div>
+
+        </div>
+      </header>
+
+    
+    
+    
+    <div class="post-body" itemprop="articleBody"><p>cgroups是Linux下控制一个（或一组）进程的资源（CPU、内存、网络等）限制机制，全称是control groups，可以对cpu、内存等资源做精细化控制。可以说，cgroup是docker的基础。</p>
+<span id="more"></span>
+
+<blockquote>
+<p>  以下基于 linux 4.19 分析</p>
+</blockquote>
+<h2 id="1-cgroup整体架构和结构体分析"><a href="#1-cgroup整体架构和结构体分析" class="headerlink" title="1. cgroup整体架构和结构体分析"></a>1. cgroup整体架构和结构体分析</h2><p>linux文档中对cgroup的定义是：A <em>cgroup</em> associates a set of tasks with a set of parameters for one or more subsystems. （cgroup将一组任务与一个或多个子系统的一组参数相关联。）</p>
+<p>其中涉及到一些常用的术语，以下做简要概括：</p>
+<ul>
+<li><p><strong>子系统：</strong>子系统利用cgroup提供的任务分组功能以特定方式处理任务组。它通常是一个资源控制器，用于调度资源或应用每个cgroup的限制。不同的子系统控制不同的进程行为。比如cpu子系统可以控制一组进程被cpu执行的时间占比。</p>
+</li>
+<li><p><strong>层级：</strong>层级在内核中表示为cgroupfs_root，一个层级控制一批进程，每个层级内部会绑定一个或多个子系统，且一个进程可以在不同的层级。但是每个进程在一个层级里是唯一的。</p>
+<blockquote>
+<p>   现在基本都是一个子系统对应一个层级，所以层级这个概念显得不是很必要，在cgroup v2中就只存在一个层级了。</p>
+</blockquote>
+</li>
+<li><p><strong>cgroup：</strong>每个层级内部是一个树的组织结构，每一个节点为一个cgroup。</p>
+<p>这个我们可以从cgroup的结构体定义中看出来：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">cgroup</span> &#123;</span></span><br><span class="line">	<span class="comment">/* self css with NULL -&gt;ss, points back to this cgroup */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> <span class="title">self</span>;</span>  <span class="comment">// 4.19中用self来表示当前这个cgroup的数据，网上的解析大多都是直接在这个cgroup中表示</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> flags;		<span class="comment">// 标识当前cgroup的状态</span></span><br><span class="line">	<span class="type">int</span> id;</span><br><span class="line">	<span class="comment">// The depth this cgroup is at.</span></span><br><span class="line">	<span class="type">int</span> level;</span><br><span class="line">	<span class="comment">/* Maximum allowed descent tree depth */</span></span><br><span class="line">	<span class="type">int</span> max_depth;</span><br><span class="line">  <span class="comment">/* Private pointers for each registered subsystem */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> __<span class="title">rcu</span> *<span class="title">subsys</span>[<span class="title">CGROUP_SUBSYS_COUNT</span>];</span> <span class="comment">// </span></span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">cgroup_root</span> *<span class="title">root</span>;</span>  <span class="comment">// 用于保存层级的一些数据，比如层级的根节点，这个层级有多少个cgroup</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> &#123;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup</span> *<span class="title">cgroup</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys</span> *<span class="title">ss</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">sibling</span>;</span>  <span class="comment">// 兄弟节点</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">children</span>;</span>  <span class="comment">// 子节点</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">rstat_css_node</span>;</span></span><br><span class="line">	<span class="comment">// ...</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> *<span class="title">parent</span>;</span>  <span class="comment">// 父节点</span></span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+</li>
+<li><p><strong>mem_cgroup：</strong>从cgroup_subsys_state中可以看到，单纯这一个结构体并不能看到各个子系统的相关信息，而是一些通用的数据或者抽象。比如内存对应的是mem_cgroup，其主要定义如下。可以看到第一个字段就是cgroup_subsys_state。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">mem_cgroup</span> &#123;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> <span class="title">css</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">mem_cgroup_per_node</span> *<span class="title">nodeinfo</span>[0];</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>也就是说，<strong>内存子系统对外只暴露出mem_cgroup中的cgroup_subsys_state部分，其余部分由内存子系统自己维护和使用。</strong>因为这个变量位于mem_cgroup的首部，所以要将其转为mem_cgroup结构，只需要通过指针类型做转换即可。</p>
+<p>因此，cgroup中的subsys变量与真正的subsys之间的关系如下图：</p>
+<p><img src="/../images/202406231909174.png" alt="202406231909174"></p>
+</li>
+<li><p><strong>css_set：</strong>每一个进程描述符task_struct中都有一个css_set。<strong>一个css_set内部可以找到所有控制此进程的cgroup，而多个进程可以共用一个css_set。</strong>这是因为他们可能使用了同一组配置文件。</p>
+<blockquote>
+<p>  由于一个进程可以同时添加到不同的 cgroup 中（前提是这些 cgroup 属于不同的层级 ）进行资源控制，而这些 cgroup 附加了不同的资源控制子系统 。所以需要使用一个结构把这些子系统的资源控制统计信息收集起来，方便进程通过子系统ID快速查找到对应的子系统资源控制统计信息</p>
+</blockquote>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">task_struct</span> &#123;</span></span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> CONFIG_CGROUPS</span></span><br><span class="line">	<span class="comment">/* Control Group info protected by css_set_lock: */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">css_set</span> __<span class="title">rcu</span>		*<span class="title">cgroups</span>;</span></span><br><span class="line">	<span class="comment">/* cg_list protected by css_set_lock and tsk-&gt;alloc_lock: */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span>		<span class="title">cg_list</span>;</span> <span class="comment">// 用于将连到同一个css_set的进程组织成一个链表</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">css_set</span> &#123;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> *<span class="title">subsys</span>[<span class="title">CGROUP_SUBSYS_COUNT</span>];</span> <span class="comment">// 存储一组指向cgroup_subsys_state的指针，一个state就是进程与一个特定子系统相关的信息</span></span><br><span class="line">  <span class="type">refcount_t</span> refcount; <span class="comment">// 引用数，因为一个css_set可以被多个进程公用，只要这些进程的 cgroups 信息相同</span></span><br><span class="line">	<span class="type">int</span> nr_tasks;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">tasks</span>;</span> <span class="comment">// 指向所有连到此css_set的进程连成的链表</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">mg_tasks</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">dying_tasks</span>;</span></span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">hlist_node</span> <span class="title">hlist</span>;</span>  <span class="comment">// 用于连接所有的css_set</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+</li>
+<li><p><strong>cgroup_subsys_state：</strong>每个子系统都有属于自己的资源控制统计信息结构。前面提到每一个层级内部有一堆cgroup，而cgroup内部保存了一个子系统数组，其内部每一个元素就是一个<strong>cgroup_subsys_state</strong>。该结构体的cgroup 指针指向了一个 cgroup 结构，也就是进程属于的 cgroup。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> &#123;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup</span> *<span class="title">cgroup</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys</span> *<span class="title">ss</span>;</span> <span class="comment">// 其实就是定义了一堆回调函数</span></span><br><span class="line"></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">sibling</span>;</span> <span class="comment">// 兄弟节点</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">children</span>;</span> <span class="comment">// 子节点</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">rstat_css_node</span>;</span></span><br><span class="line">	<span class="comment">// ...</span></span><br><span class="line">  <span class="type">unsigned</span> <span class="type">int</span> flags;		<span class="comment">// 如果其所属的cgroup是层级的根节点，会设置CSS_ROOT</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> *<span class="title">parent</span>;</span> <span class="comment">// 父节点</span></span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>通过以上的结构体，进程和cgroup就可以关联起来了：<code>task_struct -&gt; css_set -&gt; cgroup_subsys_state &lt;-&gt; cgroup</code></p>
+<p>几个结构体的连接示意图如下：</p>
+<p><img src="/../images/202406231916784.png" alt="img"></p>
+</li>
+<li><p><strong>cgroup_subsys</strong>：上述结构体中的该变量定义了一组操作（函数指针），各个子系统根据各自的需要去实现。然后各个特定的子系统对应 cgroup_subsys 则是实现了相应操作的子类。</p>
+<p>除了函数指针外， cgroup_subsys 结构还包含了很多字段，下面说明一下各个字段的作用：</p>
+<p>（1）subsys_id : 表示了子系统的ID。</p>
+<p>（2）active : 表示子系统是否被激活。</p>
+<p>（3）disabled : 子系统是否被禁止。</p>
+<p>（4）name : 子系统名称。</p>
+<p>（5）root : 被附加到的层级挂载点。</p>
+<p>（6）sibling : 用于连接被附加到同一个层级的所有子系统。</p>
+<p>（7）private : 私有数据。</p>
+<p>比如内存对应的操作为：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys</span> <span class="title">memory_cgrp_subsys</span> =</span> &#123;</span><br><span class="line">	.css_alloc = mem_cgroup_css_alloc,</span><br><span class="line">	.css_online = mem_cgroup_css_online,</span><br><span class="line">	.css_offline = mem_cgroup_css_offline,</span><br><span class="line">	.css_released = mem_cgroup_css_released,</span><br><span class="line">	.css_free = mem_cgroup_css_free,</span><br><span class="line">	.css_reset = mem_cgroup_css_reset,</span><br><span class="line">	.can_attach = mem_cgroup_can_attach,</span><br><span class="line">	.cancel_attach = mem_cgroup_cancel_attach,</span><br><span class="line">	.post_attach = mem_cgroup_move_task,</span><br><span class="line">	.bind = mem_cgroup_bind,</span><br><span class="line">	.dfl_cftypes = memory_files,</span><br><span class="line">	.legacy_cftypes = mem_cgroup_legacy_files,</span><br><span class="line">	.early_init = <span class="number">0</span>,</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure></li>
+</ul>
+<p><img src="/../images/202406232141639.png" alt="202406232141639"></p>
+<h2 id="2-cgroup的初始化"><a href="#2-cgroup的初始化" class="headerlink" title="2. cgroup的初始化"></a>2. cgroup的初始化</h2><p><strong>cgroup是基于VFS实现的。</strong></p>
+<p>首先内核启动的时候就对cgroup做了初始化：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br></pre></td><td class="code"><pre><span class="line">i386_start_kernel -&gt; start_kernel</span><br><span class="line">  </span><br><span class="line">asmlinkage __visible <span class="type">void</span> __init <span class="title function_">start_kernel</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="comment">// 分两个阶段做初始化</span></span><br><span class="line">  cgroup_init_early();</span><br><span class="line">  <span class="comment">// ...</span></span><br><span class="line">	cgroup_init();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-1-cgroup-init-early"><a href="#2-1-cgroup-init-early" class="headerlink" title="2.1 cgroup_init_early"></a>2.1 cgroup_init_early</h3><p>位于kernel&#x2F;cgroup&#x2F;cgroup.c中。主要的几个函数如下：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * cgroup_init_early - cgroup initialization at system boot</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * Initialize cgroups at system boot, and initialize any</span></span><br><span class="line"><span class="comment"> * subsystems that request early init.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">int</span> __init <span class="title function_">cgroup_init_early</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">  init_cgroup_root();</span><br><span class="line">  RCU_INIT_POINTER(init_task.cgroups, &amp;init_css_set);</span><br><span class="line">  for_each_subsys(ss, i) &#123;</span><br><span class="line">    ss-&gt;name = cgroup_subsys_name[i];</span><br><span class="line">    <span class="keyword">if</span> (ss-&gt;early_init)</span><br><span class="line">			cgroup_init_subsys(ss, <span class="literal">true</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>下面对此做具体一点的分析：</p>
+<p><strong>init_cgroup_root</strong>主要用于初始化<code>cgrp_dfl_root</code>。这个是全局变量，表示的是default cgroup_root（全局的root node？），主要是在cgroup v2中比较重要。里面主要是对结构做了一些初始化，对该root对应的cgrp做了一些设置（比如flags、root、nr等）。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">cgrp_dfl_root-&gt;cgrp-&gt;root = cgrp_dfl_root</span><br><span class="line">cgrp_dfl_root-&gt;cgrp-&gt;self-&gt;cgroup = cgrp_dfl_root-&gt;cgrp</span><br><span class="line">  </span><br><span class="line"><span class="keyword">struct</span> cgroup_root cgrp_dfl_root = &#123; .cgrp.rstat_cpu = &amp;cgrp_dfl_root_rstat_cpu &#125;;</span><br></pre></td></tr></table></figure>
+
+<p>RCU_INIT_POINTER(init_task.cgroups, &amp;init_css_set); 主要是把初始化的全局 <code>init_css_set</code> 分配给 <code>init_task</code>，它表示系统中的第一个进程。全局变量<code>init_css_set</code>是系统最初始的css_set，保存了所有子系统的默认状态。</p>
+<p><strong>cgroup_init_subsys</strong>主要是初始化 id 和 name，如果 ss 的 early_init 为真，调用 cgroup_init_subsys 完善它与cgrp_dfl_root 的关系。</p>
+<p>其中for_each_subsys的定义如下，可以看到，这里使用了一个全局数组**cgroup_subsys[]**。在内核源代码中，通过宏定义和数组生成技术，定义了一个全局数组<code>cgroup_subsys[]</code>，其中包含了所有预定义的cgroup子系统。这个数组通过包含&lt;linux&#x2F;cgroup_subsys.h&gt;头文件来填充各个子系统的具体结构和函数指针。其中的SUBSYS宏可以将每个子系统的名称和对应的结构体添加到<code>cgroup_subsys[]</code>数组中。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br></pre></td><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> for_each_subsys(ss, ssid)					\</span></span><br><span class="line"><span class="meta">	for ((ssid) = 0; (ssid) &lt; CGROUP_SUBSYS_COUNT &amp;&amp;		\</span></span><br><span class="line"><span class="meta">	     (((ss) = cgroup_subsys[ssid]) || true); (ssid)++)</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 以下是include/linux/cgroup_subsys.h中的部分内容</span></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> IS_ENABLED(CONFIG_CPUSETS)</span></span><br><span class="line">SUBSYS(cpuset)</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> IS_ENABLED(CONFIG_CGROUP_SCHED)</span></span><br><span class="line">SUBSYS(cpu)</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p>对于需要做early_init的ss，做cgroup_init_subsys。这里其实主要是cpu&#x2F;cpuset&#x2F;cpuacct这三个需要做early_init（关键词：<code>.early_init    = true</code>）。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span> __init <span class="title function_">cgroup_init_subsys</span><span class="params">(<span class="keyword">struct</span> cgroup_subsys *ss, <span class="type">bool</span> early)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> *<span class="title">css</span>;</span></span><br><span class="line"></span><br><span class="line">	pr_debug(<span class="string">&quot;Initializing cgroup subsys %s\n&quot;</span>, ss-&gt;name);</span><br><span class="line"></span><br><span class="line">	mutex_lock(&amp;cgroup_mutex);</span><br><span class="line"></span><br><span class="line">	idr_init(&amp;ss-&gt;css_idr);</span><br><span class="line">	INIT_LIST_HEAD(&amp;ss-&gt;cfts);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* Create the root cgroup state for this subsystem */</span></span><br><span class="line">	ss-&gt;root = &amp;cgrp_dfl_root;</span><br><span class="line">	css = ss-&gt;css_alloc(cgroup_css(&amp;cgrp_dfl_root.cgrp, ss));</span><br><span class="line">  <span class="comment">/* 调用各个子系统的css_alloc函数分配一个struct cgroup_subsys_state</span></span><br><span class="line"><span class="comment">   * 因为此时cgrp_dfl_root-&gt;cgrp的subsys数组未初始化，</span></span><br><span class="line"><span class="comment">   * 所以cgroup_css返回NULL，此时cpuset、cpu、cpuacct子系统的css_alloc函数返回的分别是全局变量top_cpuset、root_task_group、root_cpuacct的css成员</span></span><br><span class="line"><span class="comment">   */</span></span><br><span class="line">  </span><br><span class="line">	<span class="comment">/* We don&#x27;t handle early failures gracefully */</span></span><br><span class="line">	BUG_ON(IS_ERR(css));</span><br><span class="line">	init_and_link_css(css, ss, &amp;cgrp_dfl_root.cgrp); </span><br><span class="line">  <span class="comment">// 上面从名字就可以看出，是初始化css，css-&gt;cgroup = cgrp_dfl_root-&gt;cgrp, css-&gt;ss = ss，不存在父节点。</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * Root csses are never destroyed and we can&#x27;t initialize</span></span><br><span class="line"><span class="comment">	 * percpu_ref during early init.  Disable refcnting.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	css-&gt;flags |= CSS_NO_REF;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (early) &#123;</span><br><span class="line">		<span class="comment">/* allocation can&#x27;t be done safely during early init */</span></span><br><span class="line">		css-&gt;id = <span class="number">1</span>;</span><br><span class="line">	&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">		css-&gt;id = cgroup_idr_alloc(&amp;ss-&gt;css_idr, css, <span class="number">1</span>, <span class="number">2</span>, GFP_KERNEL);</span><br><span class="line">		BUG_ON(css-&gt;id &lt; <span class="number">0</span>);</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* Update the init_css_set to contain a subsys</span></span><br><span class="line"><span class="comment">	 * pointer to this state - since the subsystem is</span></span><br><span class="line"><span class="comment">	 * newly registered, all tasks and hence the</span></span><br><span class="line"><span class="comment">	 * init_css_set is in the subsystem&#x27;s root cgroup. */</span></span><br><span class="line">	init_css_set.subsys[ss-&gt;id] = css; <span class="comment">// init_css_set的subsys数组的前三项得以填充</span></span><br><span class="line"></span><br><span class="line">	have_fork_callback |= (<span class="type">bool</span>)ss-&gt;fork &lt;&lt; ss-&gt;id;</span><br><span class="line">	have_exit_callback |= (<span class="type">bool</span>)ss-&gt;<span class="built_in">exit</span> &lt;&lt; ss-&gt;id;</span><br><span class="line">	have_release_callback |= (<span class="type">bool</span>)ss-&gt;release &lt;&lt; ss-&gt;id;</span><br><span class="line">	have_canfork_callback |= (<span class="type">bool</span>)ss-&gt;can_fork &lt;&lt; ss-&gt;id;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* At system boot, before all subsystems have been</span></span><br><span class="line"><span class="comment">	 * registered, no tasks have been forked, so we don&#x27;t</span></span><br><span class="line"><span class="comment">	 * need to invoke fork callbacks here. */</span></span><br><span class="line">	BUG_ON(!list_empty(&amp;init_task.tasks));</span><br><span class="line"></span><br><span class="line">	BUG_ON(online_css(css));</span><br><span class="line">  <span class="comment">//调用子系统定义的css_online函数，并递增该css的online_count，</span></span><br><span class="line">	<span class="comment">//cgrp_dfl_root-&gt;cgrp的subsys数组前三项被填充</span></span><br><span class="line"></span><br><span class="line">	mutex_unlock(&amp;cgroup_mutex);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>所以总结来说：init_css_set 和init_cgroup（cgrp_dfl_root-&gt;cgrp）的subsys数组前三项被填充，因为cpuset、cpu、cpuacct三个子系统在这个阶段需要初始化。</p>
+<h3 id="2-2-cgroup-init"><a href="#2-2-cgroup-init" class="headerlink" title="2.2 cgroup_init"></a>2.2 cgroup_init</h3><p>这里负责初始化剩余子系统，添加各个子系统的节点（cftype）</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br></pre></td><td class="code"><pre><span class="line"><span class="type">int</span> __init <span class="title function_">cgroup_init</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">  </span><br><span class="line">  BUG_ON(cgroup_setup_root(&amp;cgrp_dfl_root, <span class="number">0</span>, <span class="number">0</span>));</span><br><span class="line">  <span class="comment">// 为cgrp_dfl_root创建kernfs需要的节点，并和init_css_set联系起来</span></span><br><span class="line">  <span class="comment">// cgroup和css_set是多对多的关系</span></span><br><span class="line"></span><br><span class="line">	for_each_subsys(ss, ssid) &#123;</span><br><span class="line">		<span class="keyword">if</span> (ss-&gt;early_init) &#123;</span><br><span class="line">			<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> *<span class="title">css</span> =</span></span><br><span class="line">				init_css_set.subsys[ss-&gt;id];</span><br><span class="line"></span><br><span class="line">			css-&gt;id = cgroup_idr_alloc(&amp;ss-&gt;css_idr, css, <span class="number">1</span>, <span class="number">2</span>,</span><br><span class="line">						   GFP_KERNEL);</span><br><span class="line">			BUG_ON(css-&gt;id &lt; <span class="number">0</span>);</span><br><span class="line">		&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">			cgroup_init_subsys(ss, <span class="literal">false</span>);</span><br><span class="line">      <span class="comment">//剩余子系统的初始化</span></span><br><span class="line">			<span class="comment">/*创建所有子系统的第一个css，root_mem_cgroup-&gt;css、blkcg_root-&gt;css ......，</span></span><br><span class="line"><span class="comment">			/*此时所有子系统的第一个css的cgroup成员均指向root_cgrp，</span></span><br><span class="line"><span class="comment">			/*root_cgrp 和init_css_set的subsys数组分别被这些css填充</span></span><br><span class="line"><span class="comment">			 */</span></span><br><span class="line">		&#125;</span><br><span class="line"></span><br><span class="line">		list_add_tail(&amp;init_css_set.e_cset_node[ssid],</span><br><span class="line">			      &amp;cgrp_dfl_root.cgrp.e_csets[ssid]);</span><br><span class="line">    </span><br><span class="line">    <span class="comment">// ...</span></span><br><span class="line">    mutex_lock(&amp;cgroup_mutex);</span><br><span class="line">		css_populate_dir(init_css_set.subsys[ssid]); <span class="comment">//创建子系统下的节点文件（还未mount，不可见）</span></span><br><span class="line">		mutex_unlock(&amp;cgroup_mutex);</span><br><span class="line">  &#125;</span><br><span class="line">  </span><br><span class="line">  <span class="comment">// ...</span></span><br><span class="line">  <span class="comment">/* init_css_set.subsys[] has been updated, re-hash */</span></span><br><span class="line">	<span class="comment">// 此时所有子系统都被填充到init_css_set的subsys，重新加入到css_set_table中</span></span><br><span class="line">	hash_del(&amp;init_css_set.hlist);</span><br><span class="line">	hash_add(css_set_table, &amp;init_css_set.hlist, css_set_hash(init_css_set.subsys));</span><br><span class="line"></span><br><span class="line">	WARN_ON(sysfs_create_mount_point(fs_kobj, <span class="string">&quot;cgroup&quot;</span>)); <span class="comment">// 在/sys/fs目录下创建cgroup目录</span></span><br><span class="line">	WARN_ON(register_filesystem(&amp;cgroup_fs_type)); <span class="comment">//注册文件系统</span></span><br><span class="line">	WARN_ON(register_filesystem(&amp;cgroup2_fs_type));</span><br><span class="line">	WARN_ON(!proc_create_single(<span class="string">&quot;cgroups&quot;</span>, <span class="number">0</span>, <span class="literal">NULL</span>, proc_cgroupstats_show));<span class="comment">// 在/proc/目录下创建cgroups节点，读取该节点展示的信息分别是子系统名、子系统所在层级、该层级下cgroup数目、是否启用该子系统</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>经过cgroup_init后，各个子系统被初始化，init_css_set 和cgrp_dfl_root-&gt;cgrp的subsys数组被填充，两者之间通过一个cgrp_cset_link建立连接。<br>此时系统中仅有一个cgroup_root: cgrp_dfl_root<br>一个cgroup:cgrp_dfl_root-&gt;cgrp<br>一个cgroup_subsys_state：cgrp_dfl_root-&gt;cgrp-&gt;self<br>一个css_set：init_css_set</p>
+<p>梳理一下几个地方的关系：</p>
+<p>cg_cgroup_link这个概念没有看到是在哪里呢（是不是现在没有这个了？待确认）</p>
+<p>没有看到层级是在哪里初始化的呢，需要找一下对应的接口</p>
+<h2 id="3-子系统的实现"><a href="#3-子系统的实现" class="headerlink" title="3. 子系统的实现"></a>3. 子系统的实现</h2><h3 id="3-0-子系统的创建以及进程的加入"><a href="#3-0-子系统的创建以及进程的加入" class="headerlink" title="3.0 子系统的创建以及进程的加入"></a>3.0 子系统的创建以及进程的加入</h3><p>待总结。</p>
+<h3 id="3-1-cpu子系统"><a href="#3-1-cpu子系统" class="headerlink" title="3.1 cpu子系统"></a>3.1 cpu子系统</h3><p>cpu子系统用于控制<strong>cgroup中所有进程可以使用的时间片</strong>。附加了这个子系统的层级下面建立的目录下都有一个<strong>cpu.shares</strong>文件，对其写入整数值可以控制该cgroup获得的时间片。</p>
+<p>cpu子系统是通过linux CFS调度器实现的。</p>
+<blockquote>
+<p>  CFS调度器将所有状态为RUNABLE的进程都被插入红黑树。在每个调度点，CFS调度器都会选择红黑树的最左边的叶子节点作为下一个将获得cpu的进程。那红黑树的键值是怎么计算的呢？红黑树的键值是进程所谓的虚拟运行时间。一个进程的虚拟运行时间是进程时间运行的时间按整个红黑树中所有的进程数量normalized的结果。</p>
+<p>  每次tick中断，CFS调度器都要更新进程的虚拟运行时间，然后调整当前进程在红黑树中的位置，调整完成后如果发现当前进程不再是最左边的叶子，就标记need_resched 标志，中断返回时就会调用scheduler()完成进程切换。</p>
+<p>  具体的分析可以参考linux的cpu调度</p>
+</blockquote>
+<p>CFS除了支持基于进程的调度，还支持基于进程组的组调度。CFS通过task_group结构体去实现进程组的调度，如下所示。这个结构体的头是一个cgroup_subsys_state，因此进程可以直接通过结构体转换得到其所在的task_group。同时cgroup结构体也可以由此获取它对应的task_group。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* Task group related information */</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">task_group</span> &#123;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> <span class="title">css</span>;</span> <span class="comment">// 这里指向了css</span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> CONFIG_FAIR_GROUP_SCHED</span></span><br><span class="line">	<span class="comment">/* schedulable entities of this group on each CPU */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">sched_entity</span>	**<span class="title">se</span>;</span> <span class="comment">// se[i]表示该task_group中在第i个cpu上的调度实体。se代表的是一个任务组，sched_entity-&gt;my_q指向task_group结构体的cfs_rq[cpu]。</span></span><br><span class="line">	<span class="comment">/* runqueue &quot;owned&quot; by this group on each CPU */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cfs_rq</span>		**<span class="title">cfs_rq</span>;</span> <span class="comment">// 这里是一个数组，每个cpu都有一个cfs_rq</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span>		shares;	<span class="comment">// 该task_group的cpu.shares，表示其权重，在函数alloc_fair_sched_group中初始化</span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> CONFIG_RT_GROUP_SCHED</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">sched_rt_entity</span>	**<span class="title">rt_se</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rt_rq</span>		**<span class="title">rt_rq</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rt_bandwidth</span>	<span class="title">rt_bandwidth</span>;</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rcu_head</span>		<span class="title">rcu</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span>	<span class="title">list</span>;</span></span><br><span class="line"></span><br><span class="line">  <span class="comment">// 这三个将task_group连成一棵树，类似于cgroup树</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">task_group</span>	*<span class="title">parent</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span>	<span class="title">siblings</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span>	<span class="title">children</span>;</span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> CONFIG_SCHED_AUTOGROUP</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">autogroup</span>	*<span class="title">autogroup</span>;</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cfs_bandwidth</span>	<span class="title">cfs_bandwidth</span>;</span></span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>既然存在进程调度和进程组调度，那CFS应该怎么确定是哪一个呢？实际上CFS对于遍历调度实体有两套定义。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment">/* Walk up scheduling entities hierarchy */</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> for_each_sched_entity(se) \</span></span><br><span class="line"><span class="meta">		for (; se; se = se-&gt;parent)</span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> for_each_sched_entity(se) \</span></span><br><span class="line"><span class="meta">		for (; se; se = NULL)</span></span><br></pre></td></tr></table></figure>
+
+<p>这样，对于进程组的调用，是从当前进程的se开始，沿着task_group树从下到上对se调用指定的函数，即更新各个se的虚拟运行时间。在非组调度情况下，只会对当前se做处理。</p>
+<p>当要进行调度时，首先从当前cfs_rq队列选出一个se（这个跟非组调度一样，即红黑树最左边的节点），将se设置成下一个运行的se。再获取该se对应的task_group拥有的cfs_rq，继续这个过程，直到cfs_rq为空，即se对应的是一个进程。然后去调度这个se。</p>
+<p>同一层的task_group跟其他进程被当成同样的调度实体来选择。当被选到的是task_group时，对该task_group的子节点重复这个过程，直到选择一个运行的进程。因此当设置一个cgroup的shared时，该cgroup被当做一个整体来跟其他的进程组或进程共享CPU时间。</p>
+<blockquote>
+<p>  比如fork出来了一个子进程，其会继承父进程的一些资源，所以<code>parent</code>指针会指向创建它的父进程的<code>sched_entity</code>。另外可能某个调度组会是更大的调度组的一部分。所以得追溯到整个调度实体的层次结构，保证这些东西的一致性，以及分组内的进程都能获得相应的调度资源。</p>
+</blockquote>
+<h3 id="3-2-内存子系统"><a href="#3-2-内存子系统" class="headerlink" title="3.2 内存子系统"></a>3.2 内存子系统</h3><p>内存子系统可以设定cgroup中task使用的内存限制，并自动生成由那些任务使用的内存资源报告。在比较新的版本中，memory子系统是通过page_counter来支持内存子系统的功能的。</p>
+<p>cgroup的内存子系统限制每个控制组的page cache和RSS物理内存。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">mem_cgroup</span> &#123;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> <span class="title">css</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* Private memcg ID. Used to ID objects that outlive the cgroup */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">mem_cgroup_id</span> <span class="title">id</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* Accounted resources */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">page_counter</span> <span class="title">memory</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">page_counter</span> <span class="title">swap</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* Legacy consumer-oriented counters */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">page_counter</span> <span class="title">memsw</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">page_counter</span> <span class="title">kmem</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">page_counter</span> <span class="title">tcpmem</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="type">int</span>	swappiness;</span><br><span class="line">	<span class="comment">/* OOM-Killer disable */</span></span><br><span class="line">	<span class="type">int</span>		oom_kill_disable;</span><br></pre></td></tr></table></figure>
+
+<p>其中的结构体page_counter是页计数器，单位是page：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">page_counter</span> &#123;</span></span><br><span class="line">	<span class="type">atomic_long_t</span> usage; <span class="comment">// 已使用的内存页计数</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> min;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> low;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> max;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">page_counter</span> *<span class="title">parent</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* effective memory.min and memory.min usage tracking */</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> emin;</span><br><span class="line">	<span class="type">atomic_long_t</span> min_usage;</span><br><span class="line">	<span class="type">atomic_long_t</span> children_min_usage;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* effective memory.low and memory.low usage tracking */</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> elow;</span><br><span class="line">	<span class="type">atomic_long_t</span> low_usage;</span><br><span class="line">	<span class="type">atomic_long_t</span> children_low_usage;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* legacy */</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> watermark;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> failcnt;</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>当为内存控制组中的进程分配内存时，会记录内存使用量（做内存记账），以下是一些记录的时间点：</p>
+<ul>
+<li>第一次访问匿名页时分配内存页</li>
+<li>访问文件时分配物理页</li>
+<li>执行COW（写时复制时），分配物理页</li>
+<li>从交换区换入页</li>
+</ul>
+<p>mem_cgroup_try_charge() 用来表示尝试记账，对控制组的内存计数加上指定的数量。</p>
+<p>mem_over_limit用于计算是否超出了。</p>
+<blockquote>
+<p>  具体的代码流程后面再分析。</p>
+</blockquote>
+<h3 id="3-3-cpuset子系统"><a href="#3-3-cpuset子系统" class="headerlink" title="3.3 cpuset子系统"></a>3.3 cpuset子系统</h3><p>cpuset子系统为cgroup中的任务分配独立CPU和内存节点，其中定义了一个cpuset数据结构来管理其中的任务能够使用的cpu和内存节点。</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">cpuset</span> &#123;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> <span class="title">css</span>;</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> flags;		<span class="comment">/* &quot;unsigned long&quot; so bitops work */</span></span><br><span class="line">	<span class="comment">/* user-configured CPUs and Memory Nodes allow to tasks */</span></span><br><span class="line">	<span class="type">cpumask_var_t</span> cpus_allowed; <span class="comment">// 这两个定义了可以使用的cpu和内存节点</span></span><br><span class="line">	<span class="type">nodemask_t</span> mems_allowed;</span><br><span class="line">	<span class="comment">/* effective CPUs and Memory Nodes allow to tasks */</span></span><br><span class="line">	<span class="type">cpumask_var_t</span> effective_cpus;</span><br><span class="line">	<span class="type">nodemask_t</span> effective_mems;</span><br><span class="line">	<span class="type">nodemask_t</span> old_mems_allowed;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">fmeter</span> <span class="title">fmeter</span>;</span>		<span class="comment">/* memory_pressure filter */</span></span><br><span class="line">	<span class="type">int</span> attach_in_progress;</span><br><span class="line">	<span class="comment">/* partition number for rebuild_sched_domains() */</span></span><br><span class="line">	<span class="type">int</span> pn;</span><br><span class="line">	<span class="comment">/* for custom sched domain */</span></span><br><span class="line">	<span class="type">int</span> relax_domain_level;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>cpuset子系统的实现是在内核代码加入一些hook代码。</p>
+<p>具体来说，内核初始化代码start_kernel中调用了cpuset_init。cpumask_setall 和nodes_setall 将 top_cpuset 能使用的 cpu 和内存节点设置成所有节点。</p>
+<p>那怎么跟调度有关系的呢？进程描述符task_struct中有关于cpu_allow的定义，这个cpu_allowed和进程所属的cpuset的cpus_allowed保持一致；同时进程fork时子进程也会继承这个。在select_task_rq做调度时，就会对此做一个判断：</p>
+<figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br></pre></td><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">task_struct</span> &#123;</span></span><br><span class="line">    <span class="type">int</span>				nr_cpus_allowed;</span><br><span class="line">	<span class="type">cpumask_t</span>			cpus_allowed;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span></span><br><span class="line"><span class="type">int</span> <span class="title function_">select_task_rq</span><span class="params">(<span class="keyword">struct</span> task_struct *p, <span class="type">int</span> cpu, <span class="type">int</span> sd_flags, <span class="type">int</span> wake_flags)</span></span><br><span class="line">&#123;</span><br><span class="line">	lockdep_assert_held(&amp;p-&gt;pi_lock);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (p-&gt;nr_cpus_allowed &gt; <span class="number">1</span>)</span><br><span class="line">		cpu = p-&gt;sched_class-&gt;select_task_rq(p, cpu, sd_flags, wake_flags);</span><br><span class="line">	<span class="keyword">else</span></span><br><span class="line">		cpu = cpumask_any(&amp;p-&gt;cpus_allowed);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (unlikely(!is_cpu_allowed(p, cpu)))</span><br><span class="line">		cpu = select_fallback_rq(task_cpu(p), p);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> cpu;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<blockquote>
+<p>  内存节点待补充。</p>
+</blockquote>
+<h2 id="4-虚拟化和容器对cgroup的使用"><a href="#4-虚拟化和容器对cgroup的使用" class="headerlink" title="4. 虚拟化和容器对cgroup的使用"></a>4. 虚拟化和容器对cgroup的使用</h2><p>对于虚拟化来说，libvirt在启动虚拟机前，可以对其做一些cgroup的限制，比如限制cpuset等。</p>
+<h2 id="参考链接"><a href="#参考链接" class="headerlink" title="参考链接"></a>参考链接</h2><p><a target="_blank" rel="noopener" href="https://zhuanlan.zhihu.com/p/680506976">Linux内核源码解析—cgroup实现之整体架构与初始化</a></p>
+<p><a target="_blank" rel="noopener" href="https://cloud.tencent.com/developer/article/2128337">【重识云原生】第六章容器6.1.7.3节——cgroups数据结构剖析</a></p>
+<p><a target="_blank" rel="noopener" href="https://blog.csdn.net/qq_40079927/article/details/134218081">linux cgroup (1)—-初始化</a></p>
+<p><a target="_blank" rel="noopener" href="https://www.bookstack.cn/read/linux-insides-zh/Cgroups-linux-cgroups-1.md">https://www.bookstack.cn/read/linux-insides-zh/Cgroups-linux-cgroups-1.md</a></p>
+<p>《Linux Cgroups 详解》 – 王喆锋</p>
+<p>cpu子系统：</p>
+<p><a target="_blank" rel="noopener" href="https://s3.shizhz.me/linux-sched/cfs-sched/group-data-structure">https://s3.shizhz.me/linux-sched/cfs-sched/group-data-structure</a></p>
+<p><a target="_blank" rel="noopener" href="https://abcdxyzk.github.io/blog/2015/08/07/cgroup-4/">https://abcdxyzk.github.io/blog/2015/08/07/cgroup-4/</a></p>
+<p>内存子系统：</p>
+<p><a target="_blank" rel="noopener" href="https://www.leviathan.vip/2019/09/01/Linux%E5%86%85%E6%A0%B8%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90-%E7%90%86%E8%A7%A3%E5%86%85%E5%AD%98%E8%B5%84%E6%BA%90%E6%8E%A7%E5%88%B6%E5%99%A8cgroup/">Linux 内核源码分析-理解 cgroup 内存资源控制</a></p>
+
+    </div>
+
+    
+    
+    
+
+    <footer class="post-footer">
+          <div class="post-tags">
+              <a href="/tags/Linux/" rel="tag"># Linux</a>
+              <a href="/tags/docker/" rel="tag"># docker</a>
+          </div>
+
+        
+
+          <div class="post-nav">
+            <div class="post-nav-item">
+                <a href="/2024/07/04/linux-namespace/" rel="prev" title="linux namespace 分析">
+                  <i class="fa fa-angle-left"></i> linux namespace 分析
+                </a>
+            </div>
+            <div class="post-nav-item">
+                <a href="/2024/07/04/linux-contianer/" rel="next" title="容器的基本概念">
+                  容器的基本概念 <i class="fa fa-angle-right"></i>
+                </a>
+            </div>
+          </div>
+    </footer>
+  </article>
+</div>
+
+
+
+
+
+
+</div>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+
+  <div class="copyright">
+    &copy; 
+    <span itemprop="copyrightYear">2024</span>
+    <span class="with-love">
+      <i class="fa fa-heart"></i>
+    </span>
+    <span class="author" itemprop="copyrightHolder">yklee</span>
+  </div>
+  <div class="powered-by">由 <a href="https://hexo.io/" rel="noopener" target="_blank">Hexo</a> & <a href="https://theme-next.js.org/" rel="noopener" target="_blank">NexT.Gemini</a> 强力驱动
+  </div>
+
+    </div>
+  </footer>
+
+  
+  <div class="toggle sidebar-toggle" role="button">
+    <span class="toggle-line"></span>
+    <span class="toggle-line"></span>
+    <span class="toggle-line"></span>
+  </div>
+  <div class="sidebar-dimmer"></div>
+  <div class="back-to-top" role="button" aria-label="返回顶部">
+    <i class="fa fa-arrow-up fa-lg"></i>
+    <span>0%</span>
+  </div>
+
+<noscript>
+  <div class="noscript-warning">Theme NexT works best with JavaScript enabled</div>
+</noscript>
+
+
+  
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js" integrity="sha256-XL2inqUJaslATFnHdJOi9GfQ60on8Wx1C2H8DYiN1xY=" crossorigin="anonymous"></script>
+<script src="/js/comments.js"></script><script src="/js/utils.js"></script><script src="/js/sidebar.js"></script><script src="/js/next-boot.js"></script>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/hexo-generator-searchdb/1.4.1/search.js" integrity="sha256-1kfA5uHPf65M5cphT2dvymhkuyHPQp5A53EGZOnOLmc=" crossorigin="anonymous"></script>
+<script src="/js/third-party/search/local-search.js"></script>
+
+
+
+
+
+
+
+  
+
+
+
+
+
+</body>
+</html>

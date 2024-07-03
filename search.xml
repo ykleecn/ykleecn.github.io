@@ -73,4 +73,369 @@
         <tag>虚拟化</tag>
       </tags>
   </entry>
+  <entry>
+    <title>Linux DMA 简介</title>
+    <url>/2024/06/13/linux-dma-overview/</url>
+    <content><![CDATA[<p>DMA（Direct Memory Access）指的是直接内存访问，它允许外部设备直接与系统内存进行数据交换，不需要CPU参与每个数据传输的过程（CPU只参与开始和结束的流程，其中结束涉及到响应中断）。</p>
+<span id="more"></span>
+
+<p>DMA依赖于DMA控制器（DMAC）的控制和管理，通过硬件的方式实现直接内存访问，其处理流程主要包括：</p>
+<ul>
+<li><strong>初始化设置</strong>：通过设置DMA控制器的寄存器，指定源地址、目标地址、传输大小和其他相关参数。</li>
+</ul>
+<ul>
+<li><strong>请求触发</strong>：外设向DMA控制器发送请求，请求进行数据传输操作。</li>
+<li><strong>数据传输</strong>：DMA控制器在得到请求后，根据设置的参数，直接从源地址读取数据并将其传输到目标地址。这个过程完全由DMA控制器完成，无需CPU的干预。</li>
+<li><strong>传输完成</strong>：一旦数据传输完成，DMA控制器会发送一个中断信号给CPU，通知传输已经结束。（关于中断的介绍看另外一篇）</li>
+</ul>
+<p>从硬件角度来说，DMAC与外设、CPU之间有一些信号线来进行交互，其内部也必须有一些元件来保证其工作，主要有：</p>
+<ul>
+<li><p>DMAC同外设之间需要有一对联络信号线——外设的DMA请求信号DREQ以及 DMAC向外设发出的DMA响应信号DACK。</p>
+</li>
+<li><p>DMAC同CPU之间也需要有一对联络信号线——DMAC向CPU 发出总线请求信号(HOLD或BUSRQ)，<strong>CPU在当前总线周期结束后向DMAC发出总线响应信号</strong>(HLDA或BUSAK)，DMAC接管对总线的控制权，进入DMA操作方式。</p>
+</li>
+<li><p>能发出地址信息，对存储器寻址，并修改地址指针。所以需要地址寄存器。</p>
+</li>
+<li><p>能决定传送的字节数，并能判断DMA传送是否结束。所以需要计数器。</p>
+</li>
+<li><p>能发出DMA结束信号，释放总线，使CPU恢复总线控制权。</p>
+</li>
+<li><p>能发出读、写控制信号，包括存储器访问信号和I&#x2F;O访问信号。所以需要有时序和读写控制逻辑。</p>
+</li>
+</ul>
+<p>这样。在DMAC的加持下，整个系统的架构应该类似于下面这样：</p>
+<p><img src="/../images/202406060012023.png" alt="image-20240606001254001"></p>
+<p>对流程的梳理：在数据传输之前，CPU需要对DMA控制器进行配置和初始化。这包括（1）DMAC初始化：设置源地址、目标地址以及传输的数据量等关键信息。（2）IO接口的初始化，即IO设备的寻址信息。</p>
+<p>然后接收外设的 DMA 请求，判断优先级，向 CPU 申请总线的控制权。接管总线控制权后，发出总线地址、读&#x2F;写命令，并向 I&#x2F;O 接口发响应信号。结束后向CPU发送中断请求，并向 I&#x2F;O 接口发结束信号</p>
+<p>由于CPU和DMAC都对系统总线有需求，所以也有不同的策略保证两者对主存的访问。有停止CPU访问、交替访问、周期挪用等方式，不再赘述。</p>
+<blockquote>
+<p>  代码梳理：待补充</p>
+</blockquote>
+<h2 id="参考"><a href="#参考" class="headerlink" title="参考"></a>参考</h2><p><a href="https://blog.csdn.net/wuyongpeng0912/article/details/46634931">https://blog.csdn.net/wuyongpeng0912/article/details/46634931</a></p>
+<p><a href="https://blog.csdn.net/challenglistic/article/details/132109276">https://blog.csdn.net/challenglistic/article/details/132109276</a></p>
+<p><a href="https://blog.csdn.net/STATEABC/article/details/138183791">https://blog.csdn.net/STATEABC/article/details/138183791</a></p>
+]]></content>
+      <categories>
+        <category>Linux</category>
+      </categories>
+      <tags>
+        <tag>Linux</tag>
+        <tag>IO</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>linux namespace 分析</title>
+    <url>/2024/07/04/linux-namespace/</url>
+    <content><![CDATA[<p>linux namespace是对全局系统资源的一种封装隔离，使处于不同namespace的进程拥有独立的资源，作为一种轻量级的虚拟机，为容器的实现提供了非常重要的支撑。</p>
+<span id="more"></span>
+
+<blockquote>
+<p>  以下代码基于linux 4.19</p>
+</blockquote>
+<h2 id="1-基础结构分析"><a href="#1-基础结构分析" class="headerlink" title="1. 基础结构分析"></a>1. 基础结构分析</h2><p>linux的进程是以task_struct结构体控制的，所以里面有一个nsproxy的变量，就是跟namespace有关。</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">task_struct</span> &#123;</span></span><br><span class="line">  <span class="comment">// ...</span></span><br><span class="line">  <span class="comment">/* Namespaces: */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">nsproxy</span>			*<span class="title">nsproxy</span>;</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>nsproxy结构体就定义了namespace以及一些操作函数：</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">nsproxy</span> &#123;</span></span><br><span class="line">	<span class="type">atomic_t</span> count; <span class="comment">// 引用计数</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">uts_namespace</span> *<span class="title">uts_ns</span>;</span> <span class="comment">// 隔离主机和域名信息。隔离了 uname() 系统调用返回的两个系统标识符 nodename 和 domainname.</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">ipc_namespace</span> *<span class="title">ipc_ns</span>;</span> <span class="comment">// 使划分到不同IPC Namespace 的进程组通信上隔离，无法通过消息队列、共享内存、信号量方式通信</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">mnt_namespace</span> *<span class="title">mnt_ns</span>;</span> <span class="comment">// 指向的是已经装载的文件系统的视图，隔离了一组进程所看到的文件系统挂载点的集合</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">pid_namespace</span> *<span class="title">pid_ns_for_children</span>;</span> <span class="comment">// 隔离了进程ID空间，不同的 PID Namespace 中的进程可以拥有相同的 PID。</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">net</span> 	     *<span class="title">net_ns</span>;</span> <span class="comment">// 网络相关，每个 Network Namespace 都有自己的网络设备、IP地址、IP路由表、/proc/net目录、端口号等。</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_namespace</span> *<span class="title">cgroup_ns</span>;</span> <span class="comment">// cgroup相关</span></span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 对应的在clone中传入的参数如下：</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CLONE_NEWCGROUP		0x02000000	<span class="comment">/* New cgroup namespace */</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CLONE_NEWUTS		0x04000000	<span class="comment">/* New utsname namespace */</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CLONE_NEWIPC		0x08000000	<span class="comment">/* New ipc namespace */</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CLONE_NEWUSER		0x10000000	<span class="comment">/* New user namespace */</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CLONE_NEWPID		0x20000000	<span class="comment">/* New pid namespace */</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> CLONE_NEWNET		0x40000000	<span class="comment">/* New network namespace */</span></span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 一些对namespace的操作</span></span><br><span class="line"><span class="type">int</span> <span class="title function_">copy_namespaces</span><span class="params">(<span class="type">unsigned</span> <span class="type">long</span> flags, <span class="keyword">struct</span> task_struct *tsk)</span>;</span><br><span class="line"><span class="type">void</span> <span class="title function_">exit_task_namespaces</span><span class="params">(<span class="keyword">struct</span> task_struct *tsk)</span>;</span><br><span class="line"><span class="type">void</span> <span class="title function_">switch_task_namespaces</span><span class="params">(<span class="keyword">struct</span> task_struct *tsk, <span class="keyword">struct</span> nsproxy *new)</span>;</span><br><span class="line"><span class="type">void</span> <span class="title function_">free_nsproxy</span><span class="params">(<span class="keyword">struct</span> nsproxy *ns)</span>;</span><br><span class="line"><span class="type">int</span> <span class="title function_">unshare_nsproxy_namespaces</span><span class="params">(<span class="type">unsigned</span> <span class="type">long</span>, <span class="keyword">struct</span> nsproxy **,</span></span><br><span class="line"><span class="params"> <span class="keyword">struct</span> fs_struct *)</span>;</span><br></pre></td></tr></table></figure>
+
+<p>这个结构是被所有 namespace 所共享的，只要一个 namespace 被 clone 了，nsproxy 也会被 clone。</p>
+<p>上面这些资源对应各自的系统调用函数和参数，通过传输相应的参数，调用clone函数来完成。</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="type">int</span> <span class="title function_">clone</span><span class="params">(<span class="type">int</span> (*child_func)(<span class="type">void</span> *), <span class="type">void</span> *child_stack, <span class="type">int</span> flags, <span class="type">void</span> *arg)</span>;</span><br></pre></td></tr></table></figure>
+
+<p>通过调用 clone()，并传入需要隔离资源对应的参数，就可以建立一个容器了（隔离什么我们自己控制）。一个容器进程也可以再 clone() 出一个容器进程，这是容器的嵌套。</p>
+<p>参考<a href="https://www.cnblogs.com/bakari/p/8560437.html">Docker 基础技术之 Linux namespace 详解 </a> ，一个简单的容器启动方法如下：</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> _GNU_SOURCE</span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;sys/types.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;sys/wait.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;stdio.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;sched.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;signal.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">include</span> <span class="string">&lt;unistd.h&gt;</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> STACK_SIZE (1024 * 1024)</span></span><br><span class="line"></span><br><span class="line"><span class="type">static</span> <span class="type">char</span> container_stack[STACK_SIZE];</span><br><span class="line"><span class="type">char</span>* <span class="type">const</span> container_args[] = &#123;</span><br><span class="line">   <span class="string">&quot;/bin/bash&quot;</span>,</span><br><span class="line">   <span class="literal">NULL</span></span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="comment">// 容器进程运行的程序主函数</span></span><br><span class="line"><span class="type">int</span> <span class="title function_">container_main</span><span class="params">(<span class="type">void</span> *args)</span></span><br><span class="line">&#123;</span><br><span class="line">   <span class="built_in">printf</span>(<span class="string">&quot;在容器进程中！\n&quot;</span>);</span><br><span class="line">   execv(container_args[<span class="number">0</span>], container_args); <span class="comment">// 执行/bin/bash   return 1;</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="type">int</span> <span class="title function_">main</span><span class="params">(<span class="type">int</span> args, <span class="type">char</span> *argv[])</span></span><br><span class="line">&#123;</span><br><span class="line">   <span class="built_in">printf</span>(<span class="string">&quot;程序开始\n&quot;</span>);</span><br><span class="line">   <span class="comment">// clone 容器进程</span></span><br><span class="line">   <span class="type">int</span> container_pid = clone(container_main, container_stack + STACK_SIZE, SIGCHLD | CLNOE_XXX, <span class="literal">NULL</span>); <span class="comment">// CLNOE_XXX根据需要|一下</span></span><br><span class="line">   <span class="comment">// 等待容器进程结束</span></span><br><span class="line">   waitpid(container_pid, <span class="literal">NULL</span>, <span class="number">0</span>);</span><br><span class="line">   <span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>如果想要查看当前进程下有哪些 namespace 隔离，可以查看文件 &#x2F;proc&#x2F;[pid]&#x2F;ns。如果两个进程指向的ns号相同，说明在同一个ns下。</p>
+<figure class="highlight bash"><table><tr><td class="code"><pre><span class="line">[root@yk-centos ~]<span class="comment"># ls -l /proc/7307/ns/</span></span><br><span class="line">总用量 0</span><br><span class="line">lrwxrwxrwx 1 root root 0 6月  29 16:07 ipc -&gt; ipc:[4026531839]</span><br><span class="line">lrwxrwxrwx 1 root root 0 6月  29 16:07 mnt -&gt; mnt:[4026531840]</span><br><span class="line">lrwxrwxrwx 1 root root 0 6月   7 12:49 net -&gt; net:[4026531956]</span><br><span class="line">lrwxrwxrwx 1 root root 0 6月   7 12:49 pid -&gt; pid:[4026531836]</span><br><span class="line">lrwxrwxrwx 1 root root 0 6月  29 16:07 user -&gt; user:[4026531837]</span><br><span class="line">lrwxrwxrwx 1 root root 0 6月  29 16:07 uts -&gt; uts:[4026531838]</span><br></pre></td></tr></table></figure>
+
+<h2 id="2-各个namespace的创建与初始化"><a href="#2-各个namespace的创建与初始化" class="headerlink" title="2. 各个namespace的创建与初始化"></a>2. 各个namespace的创建与初始化</h2><p>在各个namespace结构定义下都有一个init函数，nsproxy也有一个init_nsproxy函数，这个函数在task初始化的时候就会被调用，而init_nsproxy定义了关于具体几个namespace的初始化</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">task_struct</span> <span class="title">init_task</span></span></span><br><span class="line"><span class="class">&#123;</span></span><br><span class="line">  	.nsproxy	= &amp;init_nsproxy,</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="keyword">struct</span> nsproxy init_nsproxy = &#123;</span><br><span class="line">	.count			= ATOMIC_INIT(<span class="number">1</span>),</span><br><span class="line">	.uts_ns			= &amp;init_uts_ns,</span><br><span class="line"><span class="meta">#<span class="keyword">if</span> defined(CONFIG_POSIX_MQUEUE) || defined(CONFIG_SYSVIPC)</span></span><br><span class="line">	.ipc_ns			= &amp;init_ipc_ns,</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">	.mnt_ns			= <span class="literal">NULL</span>,</span><br><span class="line">	.pid_ns_for_children	= &amp;init_pid_ns,</span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> CONFIG_NET</span></span><br><span class="line">	.net_ns			= &amp;init_net,</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> CONFIG_CGROUPS</span></span><br><span class="line">	.cgroup_ns		= &amp;init_cgroup_ns,</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-1-创建新的namespace"><a href="#2-1-创建新的namespace" class="headerlink" title="2.1 创建新的namespace"></a>2.1 创建新的namespace</h3><p>linux是通过clone函数来创建namespace的，另外fork、vfork也对clone进行了封装（一般不指定的话是不需要新建namespace的）。接下来以fork方式做简单的分析是怎么新建一个namespace的。</p>
+<p>fork&#x2F;vfork最终都会调用到_do_fork函数，该函数的一个形参就是clone_flags</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="type">long</span> _do_fork(<span class="type">unsigned</span> <span class="type">long</span> clone_flags, <span class="comment">// 与clone和namespace有关</span></span><br><span class="line">	      <span class="type">unsigned</span> <span class="type">long</span> stack_start,</span><br><span class="line">	      <span class="type">unsigned</span> <span class="type">long</span> stack_size,</span><br><span class="line">	      <span class="type">int</span> __user *parent_tidptr,</span><br><span class="line">	      <span class="type">int</span> __user *child_tidptr,</span><br><span class="line">	      <span class="type">unsigned</span> <span class="type">long</span> tls)</span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">task_struct</span> *<span class="title">p</span>;</span></span><br><span class="line"> 	p = copy_process(clone_flags, stack_start, stack_size,</span><br><span class="line">			 child_tidptr, <span class="literal">NULL</span>, trace, tls, NUMA_NO_NODE);</span><br><span class="line">    </span><br><span class="line">    pid = get_task_pid(p, PIDTYPE_PID);</span><br><span class="line">    <span class="comment">// 调用 vfork() 方法，完成相关的初始化工作  </span></span><br><span class="line">    <span class="keyword">if</span> (clone_flags &amp; CLONE_VFORK) &#123;</span><br><span class="line">		p-&gt;vfork_done = &amp;vfork;</span><br><span class="line">		init_completion(&amp;vfork);</span><br><span class="line">         get_task_struct(p);</span><br><span class="line">   	&#125;</span><br><span class="line"></span><br><span class="line">   	<span class="comment">// 将新进程加入到调度器中，为其分配 CPU，准备执行</span></span><br><span class="line">   	wake_up_new_task(p);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这里面比较重要的就是copy_process将父进程的信息复制给子进程。</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="type">static</span> __latent_entropy <span class="keyword">struct</span> task_struct *<span class="title function_">copy_process</span><span class="params">()</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="comment">// 校验几个flag是不是正确的，是不是可以兼容</span></span><br><span class="line">    <span class="comment">// 初始化task_struct，并分配 CPU，进程状态设置为 TASK_RUNNING</span></span><br><span class="line">    retval = sched_fork(clone_flags, p);</span><br><span class="line">    <span class="comment">// 复制所有进程信息，包括文件系统，信号处理函数、信号、内存管理等</span></span><br><span class="line">    shm_init_task(p);</span><br><span class="line">    ...</span><br><span class="line">    <span class="comment">// 复制namespace</span></span><br><span class="line">    retval = copy_namespaces(clone_flags, p);</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="type">int</span> <span class="title function_">copy_namespaces</span><span class="params">(<span class="type">unsigned</span> <span class="type">long</span> flags, <span class="keyword">struct</span> task_struct *tsk)</span></span><br><span class="line">&#123;</span><br><span class="line">    <span class="comment">// 没有特殊标志的话，是直接复用之间的ns的</span></span><br><span class="line">    <span class="keyword">if</span> (likely(!(flags &amp; (CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC |</span><br><span class="line">			      CLONE_NEWPID | CLONE_NEWNET |</span><br><span class="line">			      CLONE_NEWCGROUP)))) &#123;</span><br><span class="line">		get_nsproxy(old_ns);</span><br><span class="line">		<span class="keyword">return</span> <span class="number">0</span>;</span><br><span class="line">	&#125;</span><br><span class="line">    </span><br><span class="line">    new_ns = create_new_namespaces(flags, tsk, user_ns, tsk-&gt;fs);</span><br><span class="line">    tsk-&gt;nsproxy = new_ns;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+
+
+<h2 id="参考链接"><a href="#参考链接" class="headerlink" title="参考链接"></a>参考链接</h2><p><a href="https://cloud.tencent.com/developer/article/2129136">https://cloud.tencent.com/developer/article/2129136</a></p>
+<p><a href="https://blog.csdn.net/summer_fish/article/details/134437688">https://blog.csdn.net/summer_fish/article/details/134437688</a></p>
+<p><a href="https://www.cnblogs.com/bakari/p/8560437.html">Docker 基础技术之 Linux namespace 详解 </a></p>
+<p><a href="https://www.cnblogs.com/bakari/p/8823642.html">Docker 基础技术之 Linux namespace 源码分析</a></p>
+]]></content>
+      <categories>
+        <category>Linux</category>
+      </categories>
+      <tags>
+        <tag>Linux</tag>
+        <tag>docker</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>linux cgroup 分析</title>
+    <url>/2024/07/04/linux-cgroup/</url>
+    <content><![CDATA[<p>cgroups是Linux下控制一个（或一组）进程的资源（CPU、内存、网络等）限制机制，全称是control groups，可以对cpu、内存等资源做精细化控制。可以说，cgroup是docker的基础。</p>
+<span id="more"></span>
+
+<blockquote>
+<p>  以下基于 linux 4.19 分析</p>
+</blockquote>
+<h2 id="1-cgroup整体架构和结构体分析"><a href="#1-cgroup整体架构和结构体分析" class="headerlink" title="1. cgroup整体架构和结构体分析"></a>1. cgroup整体架构和结构体分析</h2><p>linux文档中对cgroup的定义是：A <em>cgroup</em> associates a set of tasks with a set of parameters for one or more subsystems. （cgroup将一组任务与一个或多个子系统的一组参数相关联。）</p>
+<p>其中涉及到一些常用的术语，以下做简要概括：</p>
+<ul>
+<li><p><strong>子系统：</strong>子系统利用cgroup提供的任务分组功能以特定方式处理任务组。它通常是一个资源控制器，用于调度资源或应用每个cgroup的限制。不同的子系统控制不同的进程行为。比如cpu子系统可以控制一组进程被cpu执行的时间占比。</p>
+</li>
+<li><p><strong>层级：</strong>层级在内核中表示为cgroupfs_root，一个层级控制一批进程，每个层级内部会绑定一个或多个子系统，且一个进程可以在不同的层级。但是每个进程在一个层级里是唯一的。</p>
+<blockquote>
+<p>   现在基本都是一个子系统对应一个层级，所以层级这个概念显得不是很必要，在cgroup v2中就只存在一个层级了。</p>
+</blockquote>
+</li>
+<li><p><strong>cgroup：</strong>每个层级内部是一个树的组织结构，每一个节点为一个cgroup。</p>
+<p>这个我们可以从cgroup的结构体定义中看出来：</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">cgroup</span> &#123;</span></span><br><span class="line">	<span class="comment">/* self css with NULL -&gt;ss, points back to this cgroup */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> <span class="title">self</span>;</span>  <span class="comment">// 4.19中用self来表示当前这个cgroup的数据，网上的解析大多都是直接在这个cgroup中表示</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> flags;		<span class="comment">// 标识当前cgroup的状态</span></span><br><span class="line">	<span class="type">int</span> id;</span><br><span class="line">	<span class="comment">// The depth this cgroup is at.</span></span><br><span class="line">	<span class="type">int</span> level;</span><br><span class="line">	<span class="comment">/* Maximum allowed descent tree depth */</span></span><br><span class="line">	<span class="type">int</span> max_depth;</span><br><span class="line">  <span class="comment">/* Private pointers for each registered subsystem */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> __<span class="title">rcu</span> *<span class="title">subsys</span>[<span class="title">CGROUP_SUBSYS_COUNT</span>];</span> <span class="comment">// </span></span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">cgroup_root</span> *<span class="title">root</span>;</span>  <span class="comment">// 用于保存层级的一些数据，比如层级的根节点，这个层级有多少个cgroup</span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> &#123;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup</span> *<span class="title">cgroup</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys</span> *<span class="title">ss</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">sibling</span>;</span>  <span class="comment">// 兄弟节点</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">children</span>;</span>  <span class="comment">// 子节点</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">rstat_css_node</span>;</span></span><br><span class="line">	<span class="comment">// ...</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> *<span class="title">parent</span>;</span>  <span class="comment">// 父节点</span></span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+</li>
+<li><p><strong>mem_cgroup：</strong>从cgroup_subsys_state中可以看到，单纯这一个结构体并不能看到各个子系统的相关信息，而是一些通用的数据或者抽象。比如内存对应的是mem_cgroup，其主要定义如下。可以看到第一个字段就是cgroup_subsys_state。</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">mem_cgroup</span> &#123;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> <span class="title">css</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">mem_cgroup_per_node</span> *<span class="title">nodeinfo</span>[0];</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>也就是说，<strong>内存子系统对外只暴露出mem_cgroup中的cgroup_subsys_state部分，其余部分由内存子系统自己维护和使用。</strong>因为这个变量位于mem_cgroup的首部，所以要将其转为mem_cgroup结构，只需要通过指针类型做转换即可。</p>
+<p>因此，cgroup中的subsys变量与真正的subsys之间的关系如下图：</p>
+<p><img src="/../images/202406231909174.png" alt="202406231909174"></p>
+</li>
+<li><p><strong>css_set：</strong>每一个进程描述符task_struct中都有一个css_set。<strong>一个css_set内部可以找到所有控制此进程的cgroup，而多个进程可以共用一个css_set。</strong>这是因为他们可能使用了同一组配置文件。</p>
+<blockquote>
+<p>  由于一个进程可以同时添加到不同的 cgroup 中（前提是这些 cgroup 属于不同的层级 ）进行资源控制，而这些 cgroup 附加了不同的资源控制子系统 。所以需要使用一个结构把这些子系统的资源控制统计信息收集起来，方便进程通过子系统ID快速查找到对应的子系统资源控制统计信息</p>
+</blockquote>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">task_struct</span> &#123;</span></span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> CONFIG_CGROUPS</span></span><br><span class="line">	<span class="comment">/* Control Group info protected by css_set_lock: */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">css_set</span> __<span class="title">rcu</span>		*<span class="title">cgroups</span>;</span></span><br><span class="line">	<span class="comment">/* cg_list protected by css_set_lock and tsk-&gt;alloc_lock: */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span>		<span class="title">cg_list</span>;</span> <span class="comment">// 用于将连到同一个css_set的进程组织成一个链表</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">css_set</span> &#123;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> *<span class="title">subsys</span>[<span class="title">CGROUP_SUBSYS_COUNT</span>];</span> <span class="comment">// 存储一组指向cgroup_subsys_state的指针，一个state就是进程与一个特定子系统相关的信息</span></span><br><span class="line">  <span class="type">refcount_t</span> refcount; <span class="comment">// 引用数，因为一个css_set可以被多个进程公用，只要这些进程的 cgroups 信息相同</span></span><br><span class="line">	<span class="type">int</span> nr_tasks;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">tasks</span>;</span> <span class="comment">// 指向所有连到此css_set的进程连成的链表</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">mg_tasks</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">dying_tasks</span>;</span></span><br><span class="line">  <span class="class"><span class="keyword">struct</span> <span class="title">hlist_node</span> <span class="title">hlist</span>;</span>  <span class="comment">// 用于连接所有的css_set</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+</li>
+<li><p><strong>cgroup_subsys_state：</strong>每个子系统都有属于自己的资源控制统计信息结构。前面提到每一个层级内部有一堆cgroup，而cgroup内部保存了一个子系统数组，其内部每一个元素就是一个<strong>cgroup_subsys_state</strong>。该结构体的cgroup 指针指向了一个 cgroup 结构，也就是进程属于的 cgroup。</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> &#123;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup</span> *<span class="title">cgroup</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys</span> *<span class="title">ss</span>;</span> <span class="comment">// 其实就是定义了一堆回调函数</span></span><br><span class="line"></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">sibling</span>;</span> <span class="comment">// 兄弟节点</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">children</span>;</span> <span class="comment">// 子节点</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span> <span class="title">rstat_css_node</span>;</span></span><br><span class="line">	<span class="comment">// ...</span></span><br><span class="line">  <span class="type">unsigned</span> <span class="type">int</span> flags;		<span class="comment">// 如果其所属的cgroup是层级的根节点，会设置CSS_ROOT</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> *<span class="title">parent</span>;</span> <span class="comment">// 父节点</span></span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>通过以上的结构体，进程和cgroup就可以关联起来了：<code>task_struct -&gt; css_set -&gt; cgroup_subsys_state &lt;-&gt; cgroup</code></p>
+<p>几个结构体的连接示意图如下：</p>
+<p><img src="/../images/202406231916784.png" alt="img"></p>
+</li>
+<li><p><strong>cgroup_subsys</strong>：上述结构体中的该变量定义了一组操作（函数指针），各个子系统根据各自的需要去实现。然后各个特定的子系统对应 cgroup_subsys 则是实现了相应操作的子类。</p>
+<p>除了函数指针外， cgroup_subsys 结构还包含了很多字段，下面说明一下各个字段的作用：</p>
+<p>（1）subsys_id : 表示了子系统的ID。</p>
+<p>（2）active : 表示子系统是否被激活。</p>
+<p>（3）disabled : 子系统是否被禁止。</p>
+<p>（4）name : 子系统名称。</p>
+<p>（5）root : 被附加到的层级挂载点。</p>
+<p>（6）sibling : 用于连接被附加到同一个层级的所有子系统。</p>
+<p>（7）private : 私有数据。</p>
+<p>比如内存对应的操作为：</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys</span> <span class="title">memory_cgrp_subsys</span> =</span> &#123;</span><br><span class="line">	.css_alloc = mem_cgroup_css_alloc,</span><br><span class="line">	.css_online = mem_cgroup_css_online,</span><br><span class="line">	.css_offline = mem_cgroup_css_offline,</span><br><span class="line">	.css_released = mem_cgroup_css_released,</span><br><span class="line">	.css_free = mem_cgroup_css_free,</span><br><span class="line">	.css_reset = mem_cgroup_css_reset,</span><br><span class="line">	.can_attach = mem_cgroup_can_attach,</span><br><span class="line">	.cancel_attach = mem_cgroup_cancel_attach,</span><br><span class="line">	.post_attach = mem_cgroup_move_task,</span><br><span class="line">	.bind = mem_cgroup_bind,</span><br><span class="line">	.dfl_cftypes = memory_files,</span><br><span class="line">	.legacy_cftypes = mem_cgroup_legacy_files,</span><br><span class="line">	.early_init = <span class="number">0</span>,</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure></li>
+</ul>
+<p><img src="/../images/202406232141639.png" alt="202406232141639"></p>
+<h2 id="2-cgroup的初始化"><a href="#2-cgroup的初始化" class="headerlink" title="2. cgroup的初始化"></a>2. cgroup的初始化</h2><p><strong>cgroup是基于VFS实现的。</strong></p>
+<p>首先内核启动的时候就对cgroup做了初始化：</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line">i386_start_kernel -&gt; start_kernel</span><br><span class="line">  </span><br><span class="line">asmlinkage __visible <span class="type">void</span> __init <span class="title function_">start_kernel</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">  <span class="comment">// 分两个阶段做初始化</span></span><br><span class="line">  cgroup_init_early();</span><br><span class="line">  <span class="comment">// ...</span></span><br><span class="line">	cgroup_init();</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="2-1-cgroup-init-early"><a href="#2-1-cgroup-init-early" class="headerlink" title="2.1 cgroup_init_early"></a>2.1 cgroup_init_early</h3><p>位于kernel&#x2F;cgroup&#x2F;cgroup.c中。主要的几个函数如下：</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="comment">/**</span></span><br><span class="line"><span class="comment"> * cgroup_init_early - cgroup initialization at system boot</span></span><br><span class="line"><span class="comment"> *</span></span><br><span class="line"><span class="comment"> * Initialize cgroups at system boot, and initialize any</span></span><br><span class="line"><span class="comment"> * subsystems that request early init.</span></span><br><span class="line"><span class="comment"> */</span></span><br><span class="line"><span class="type">int</span> __init <span class="title function_">cgroup_init_early</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">  init_cgroup_root();</span><br><span class="line">  RCU_INIT_POINTER(init_task.cgroups, &amp;init_css_set);</span><br><span class="line">  for_each_subsys(ss, i) &#123;</span><br><span class="line">    ss-&gt;name = cgroup_subsys_name[i];</span><br><span class="line">    <span class="keyword">if</span> (ss-&gt;early_init)</span><br><span class="line">			cgroup_init_subsys(ss, <span class="literal">true</span>);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>下面对此做具体一点的分析：</p>
+<p><strong>init_cgroup_root</strong>主要用于初始化<code>cgrp_dfl_root</code>。这个是全局变量，表示的是default cgroup_root（全局的root node？），主要是在cgroup v2中比较重要。里面主要是对结构做了一些初始化，对该root对应的cgrp做了一些设置（比如flags、root、nr等）。</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line">cgrp_dfl_root-&gt;cgrp-&gt;root = cgrp_dfl_root</span><br><span class="line">cgrp_dfl_root-&gt;cgrp-&gt;self-&gt;cgroup = cgrp_dfl_root-&gt;cgrp</span><br><span class="line">  </span><br><span class="line"><span class="keyword">struct</span> cgroup_root cgrp_dfl_root = &#123; .cgrp.rstat_cpu = &amp;cgrp_dfl_root_rstat_cpu &#125;;</span><br></pre></td></tr></table></figure>
+
+<p>RCU_INIT_POINTER(init_task.cgroups, &amp;init_css_set); 主要是把初始化的全局 <code>init_css_set</code> 分配给 <code>init_task</code>，它表示系统中的第一个进程。全局变量<code>init_css_set</code>是系统最初始的css_set，保存了所有子系统的默认状态。</p>
+<p><strong>cgroup_init_subsys</strong>主要是初始化 id 和 name，如果 ss 的 early_init 为真，调用 cgroup_init_subsys 完善它与cgrp_dfl_root 的关系。</p>
+<p>其中for_each_subsys的定义如下，可以看到，这里使用了一个全局数组**cgroup_subsys[]**。在内核源代码中，通过宏定义和数组生成技术，定义了一个全局数组<code>cgroup_subsys[]</code>，其中包含了所有预定义的cgroup子系统。这个数组通过包含&lt;linux&#x2F;cgroup_subsys.h&gt;头文件来填充各个子系统的具体结构和函数指针。其中的SUBSYS宏可以将每个子系统的名称和对应的结构体添加到<code>cgroup_subsys[]</code>数组中。</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="meta">#<span class="keyword">define</span> for_each_subsys(ss, ssid)					\</span></span><br><span class="line"><span class="meta">	for ((ssid) = 0; (ssid) &lt; CGROUP_SUBSYS_COUNT &amp;&amp;		\</span></span><br><span class="line"><span class="meta">	     (((ss) = cgroup_subsys[ssid]) || true); (ssid)++)</span></span><br><span class="line"></span><br><span class="line"><span class="comment">// 以下是include/linux/cgroup_subsys.h中的部分内容</span></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> IS_ENABLED(CONFIG_CPUSETS)</span></span><br><span class="line">SUBSYS(cpuset)</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">if</span> IS_ENABLED(CONFIG_CGROUP_SCHED)</span></span><br><span class="line">SUBSYS(cpu)</span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br></pre></td></tr></table></figure>
+
+<p>对于需要做early_init的ss，做cgroup_init_subsys。这里其实主要是cpu&#x2F;cpuset&#x2F;cpuacct这三个需要做early_init（关键词：<code>.early_init    = true</code>）。</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="type">static</span> <span class="type">void</span> __init <span class="title function_">cgroup_init_subsys</span><span class="params">(<span class="keyword">struct</span> cgroup_subsys *ss, <span class="type">bool</span> early)</span></span><br><span class="line">&#123;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> *<span class="title">css</span>;</span></span><br><span class="line"></span><br><span class="line">	pr_debug(<span class="string">&quot;Initializing cgroup subsys %s\n&quot;</span>, ss-&gt;name);</span><br><span class="line"></span><br><span class="line">	mutex_lock(&amp;cgroup_mutex);</span><br><span class="line"></span><br><span class="line">	idr_init(&amp;ss-&gt;css_idr);</span><br><span class="line">	INIT_LIST_HEAD(&amp;ss-&gt;cfts);</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* Create the root cgroup state for this subsystem */</span></span><br><span class="line">	ss-&gt;root = &amp;cgrp_dfl_root;</span><br><span class="line">	css = ss-&gt;css_alloc(cgroup_css(&amp;cgrp_dfl_root.cgrp, ss));</span><br><span class="line">  <span class="comment">/* 调用各个子系统的css_alloc函数分配一个struct cgroup_subsys_state</span></span><br><span class="line"><span class="comment">   * 因为此时cgrp_dfl_root-&gt;cgrp的subsys数组未初始化，</span></span><br><span class="line"><span class="comment">   * 所以cgroup_css返回NULL，此时cpuset、cpu、cpuacct子系统的css_alloc函数返回的分别是全局变量top_cpuset、root_task_group、root_cpuacct的css成员</span></span><br><span class="line"><span class="comment">   */</span></span><br><span class="line">  </span><br><span class="line">	<span class="comment">/* We don&#x27;t handle early failures gracefully */</span></span><br><span class="line">	BUG_ON(IS_ERR(css));</span><br><span class="line">	init_and_link_css(css, ss, &amp;cgrp_dfl_root.cgrp); </span><br><span class="line">  <span class="comment">// 上面从名字就可以看出，是初始化css，css-&gt;cgroup = cgrp_dfl_root-&gt;cgrp, css-&gt;ss = ss，不存在父节点。</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/*</span></span><br><span class="line"><span class="comment">	 * Root csses are never destroyed and we can&#x27;t initialize</span></span><br><span class="line"><span class="comment">	 * percpu_ref during early init.  Disable refcnting.</span></span><br><span class="line"><span class="comment">	 */</span></span><br><span class="line">	css-&gt;flags |= CSS_NO_REF;</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (early) &#123;</span><br><span class="line">		<span class="comment">/* allocation can&#x27;t be done safely during early init */</span></span><br><span class="line">		css-&gt;id = <span class="number">1</span>;</span><br><span class="line">	&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">		css-&gt;id = cgroup_idr_alloc(&amp;ss-&gt;css_idr, css, <span class="number">1</span>, <span class="number">2</span>, GFP_KERNEL);</span><br><span class="line">		BUG_ON(css-&gt;id &lt; <span class="number">0</span>);</span><br><span class="line">	&#125;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* Update the init_css_set to contain a subsys</span></span><br><span class="line"><span class="comment">	 * pointer to this state - since the subsystem is</span></span><br><span class="line"><span class="comment">	 * newly registered, all tasks and hence the</span></span><br><span class="line"><span class="comment">	 * init_css_set is in the subsystem&#x27;s root cgroup. */</span></span><br><span class="line">	init_css_set.subsys[ss-&gt;id] = css; <span class="comment">// init_css_set的subsys数组的前三项得以填充</span></span><br><span class="line"></span><br><span class="line">	have_fork_callback |= (<span class="type">bool</span>)ss-&gt;fork &lt;&lt; ss-&gt;id;</span><br><span class="line">	have_exit_callback |= (<span class="type">bool</span>)ss-&gt;<span class="built_in">exit</span> &lt;&lt; ss-&gt;id;</span><br><span class="line">	have_release_callback |= (<span class="type">bool</span>)ss-&gt;release &lt;&lt; ss-&gt;id;</span><br><span class="line">	have_canfork_callback |= (<span class="type">bool</span>)ss-&gt;can_fork &lt;&lt; ss-&gt;id;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* At system boot, before all subsystems have been</span></span><br><span class="line"><span class="comment">	 * registered, no tasks have been forked, so we don&#x27;t</span></span><br><span class="line"><span class="comment">	 * need to invoke fork callbacks here. */</span></span><br><span class="line">	BUG_ON(!list_empty(&amp;init_task.tasks));</span><br><span class="line"></span><br><span class="line">	BUG_ON(online_css(css));</span><br><span class="line">  <span class="comment">//调用子系统定义的css_online函数，并递增该css的online_count，</span></span><br><span class="line">	<span class="comment">//cgrp_dfl_root-&gt;cgrp的subsys数组前三项被填充</span></span><br><span class="line"></span><br><span class="line">	mutex_unlock(&amp;cgroup_mutex);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>所以总结来说：init_css_set 和init_cgroup（cgrp_dfl_root-&gt;cgrp）的subsys数组前三项被填充，因为cpuset、cpu、cpuacct三个子系统在这个阶段需要初始化。</p>
+<h3 id="2-2-cgroup-init"><a href="#2-2-cgroup-init" class="headerlink" title="2.2 cgroup_init"></a>2.2 cgroup_init</h3><p>这里负责初始化剩余子系统，添加各个子系统的节点（cftype）</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="type">int</span> __init <span class="title function_">cgroup_init</span><span class="params">(<span class="type">void</span>)</span></span><br><span class="line">&#123;</span><br><span class="line">  </span><br><span class="line">  BUG_ON(cgroup_setup_root(&amp;cgrp_dfl_root, <span class="number">0</span>, <span class="number">0</span>));</span><br><span class="line">  <span class="comment">// 为cgrp_dfl_root创建kernfs需要的节点，并和init_css_set联系起来</span></span><br><span class="line">  <span class="comment">// cgroup和css_set是多对多的关系</span></span><br><span class="line"></span><br><span class="line">	for_each_subsys(ss, ssid) &#123;</span><br><span class="line">		<span class="keyword">if</span> (ss-&gt;early_init) &#123;</span><br><span class="line">			<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> *<span class="title">css</span> =</span></span><br><span class="line">				init_css_set.subsys[ss-&gt;id];</span><br><span class="line"></span><br><span class="line">			css-&gt;id = cgroup_idr_alloc(&amp;ss-&gt;css_idr, css, <span class="number">1</span>, <span class="number">2</span>,</span><br><span class="line">						   GFP_KERNEL);</span><br><span class="line">			BUG_ON(css-&gt;id &lt; <span class="number">0</span>);</span><br><span class="line">		&#125; <span class="keyword">else</span> &#123;</span><br><span class="line">			cgroup_init_subsys(ss, <span class="literal">false</span>);</span><br><span class="line">      <span class="comment">//剩余子系统的初始化</span></span><br><span class="line">			<span class="comment">/*创建所有子系统的第一个css，root_mem_cgroup-&gt;css、blkcg_root-&gt;css ......，</span></span><br><span class="line"><span class="comment">			/*此时所有子系统的第一个css的cgroup成员均指向root_cgrp，</span></span><br><span class="line"><span class="comment">			/*root_cgrp 和init_css_set的subsys数组分别被这些css填充</span></span><br><span class="line"><span class="comment">			 */</span></span><br><span class="line">		&#125;</span><br><span class="line"></span><br><span class="line">		list_add_tail(&amp;init_css_set.e_cset_node[ssid],</span><br><span class="line">			      &amp;cgrp_dfl_root.cgrp.e_csets[ssid]);</span><br><span class="line">    </span><br><span class="line">    <span class="comment">// ...</span></span><br><span class="line">    mutex_lock(&amp;cgroup_mutex);</span><br><span class="line">		css_populate_dir(init_css_set.subsys[ssid]); <span class="comment">//创建子系统下的节点文件（还未mount，不可见）</span></span><br><span class="line">		mutex_unlock(&amp;cgroup_mutex);</span><br><span class="line">  &#125;</span><br><span class="line">  </span><br><span class="line">  <span class="comment">// ...</span></span><br><span class="line">  <span class="comment">/* init_css_set.subsys[] has been updated, re-hash */</span></span><br><span class="line">	<span class="comment">// 此时所有子系统都被填充到init_css_set的subsys，重新加入到css_set_table中</span></span><br><span class="line">	hash_del(&amp;init_css_set.hlist);</span><br><span class="line">	hash_add(css_set_table, &amp;init_css_set.hlist, css_set_hash(init_css_set.subsys));</span><br><span class="line"></span><br><span class="line">	WARN_ON(sysfs_create_mount_point(fs_kobj, <span class="string">&quot;cgroup&quot;</span>)); <span class="comment">// 在/sys/fs目录下创建cgroup目录</span></span><br><span class="line">	WARN_ON(register_filesystem(&amp;cgroup_fs_type)); <span class="comment">//注册文件系统</span></span><br><span class="line">	WARN_ON(register_filesystem(&amp;cgroup2_fs_type));</span><br><span class="line">	WARN_ON(!proc_create_single(<span class="string">&quot;cgroups&quot;</span>, <span class="number">0</span>, <span class="literal">NULL</span>, proc_cgroupstats_show));<span class="comment">// 在/proc/目录下创建cgroups节点，读取该节点展示的信息分别是子系统名、子系统所在层级、该层级下cgroup数目、是否启用该子系统</span></span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>经过cgroup_init后，各个子系统被初始化，init_css_set 和cgrp_dfl_root-&gt;cgrp的subsys数组被填充，两者之间通过一个cgrp_cset_link建立连接。<br>此时系统中仅有一个cgroup_root: cgrp_dfl_root<br>一个cgroup:cgrp_dfl_root-&gt;cgrp<br>一个cgroup_subsys_state：cgrp_dfl_root-&gt;cgrp-&gt;self<br>一个css_set：init_css_set</p>
+<p>梳理一下几个地方的关系：</p>
+<p>cg_cgroup_link这个概念没有看到是在哪里呢（是不是现在没有这个了？待确认）</p>
+<p>没有看到层级是在哪里初始化的呢，需要找一下对应的接口</p>
+<h2 id="3-子系统的实现"><a href="#3-子系统的实现" class="headerlink" title="3. 子系统的实现"></a>3. 子系统的实现</h2><h3 id="3-0-子系统的创建以及进程的加入"><a href="#3-0-子系统的创建以及进程的加入" class="headerlink" title="3.0 子系统的创建以及进程的加入"></a>3.0 子系统的创建以及进程的加入</h3><p>待总结。</p>
+<h3 id="3-1-cpu子系统"><a href="#3-1-cpu子系统" class="headerlink" title="3.1 cpu子系统"></a>3.1 cpu子系统</h3><p>cpu子系统用于控制<strong>cgroup中所有进程可以使用的时间片</strong>。附加了这个子系统的层级下面建立的目录下都有一个<strong>cpu.shares</strong>文件，对其写入整数值可以控制该cgroup获得的时间片。</p>
+<p>cpu子系统是通过linux CFS调度器实现的。</p>
+<blockquote>
+<p>  CFS调度器将所有状态为RUNABLE的进程都被插入红黑树。在每个调度点，CFS调度器都会选择红黑树的最左边的叶子节点作为下一个将获得cpu的进程。那红黑树的键值是怎么计算的呢？红黑树的键值是进程所谓的虚拟运行时间。一个进程的虚拟运行时间是进程时间运行的时间按整个红黑树中所有的进程数量normalized的结果。</p>
+<p>  每次tick中断，CFS调度器都要更新进程的虚拟运行时间，然后调整当前进程在红黑树中的位置，调整完成后如果发现当前进程不再是最左边的叶子，就标记need_resched 标志，中断返回时就会调用scheduler()完成进程切换。</p>
+<p>  具体的分析可以参考linux的cpu调度</p>
+</blockquote>
+<p>CFS除了支持基于进程的调度，还支持基于进程组的组调度。CFS通过task_group结构体去实现进程组的调度，如下所示。这个结构体的头是一个cgroup_subsys_state，因此进程可以直接通过结构体转换得到其所在的task_group。同时cgroup结构体也可以由此获取它对应的task_group。</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="comment">/* Task group related information */</span></span><br><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">task_group</span> &#123;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> <span class="title">css</span>;</span> <span class="comment">// 这里指向了css</span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> CONFIG_FAIR_GROUP_SCHED</span></span><br><span class="line">	<span class="comment">/* schedulable entities of this group on each CPU */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">sched_entity</span>	**<span class="title">se</span>;</span> <span class="comment">// se[i]表示该task_group中在第i个cpu上的调度实体。se代表的是一个任务组，sched_entity-&gt;my_q指向task_group结构体的cfs_rq[cpu]。</span></span><br><span class="line">	<span class="comment">/* runqueue &quot;owned&quot; by this group on each CPU */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cfs_rq</span>		**<span class="title">cfs_rq</span>;</span> <span class="comment">// 这里是一个数组，每个cpu都有一个cfs_rq</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span>		shares;	<span class="comment">// 该task_group的cpu.shares，表示其权重，在函数alloc_fair_sched_group中初始化</span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> CONFIG_RT_GROUP_SCHED</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">sched_rt_entity</span>	**<span class="title">rt_se</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rt_rq</span>		**<span class="title">rt_rq</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rt_bandwidth</span>	<span class="title">rt_bandwidth</span>;</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">rcu_head</span>		<span class="title">rcu</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span>	<span class="title">list</span>;</span></span><br><span class="line"></span><br><span class="line">  <span class="comment">// 这三个将task_group连成一棵树，类似于cgroup树</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">task_group</span>	*<span class="title">parent</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span>	<span class="title">siblings</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">list_head</span>	<span class="title">children</span>;</span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">ifdef</span> CONFIG_SCHED_AUTOGROUP</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">autogroup</span>	*<span class="title">autogroup</span>;</span></span><br><span class="line"><span class="meta">#<span class="keyword">endif</span></span></span><br><span class="line"></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cfs_bandwidth</span>	<span class="title">cfs_bandwidth</span>;</span></span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>既然存在进程调度和进程组调度，那CFS应该怎么确定是哪一个呢？实际上CFS对于遍历调度实体有两套定义。</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="comment">/* Walk up scheduling entities hierarchy */</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> for_each_sched_entity(se) \</span></span><br><span class="line"><span class="meta">		for (; se; se = se-&gt;parent)</span></span><br><span class="line"></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> for_each_sched_entity(se) \</span></span><br><span class="line"><span class="meta">		for (; se; se = NULL)</span></span><br></pre></td></tr></table></figure>
+
+<p>这样，对于进程组的调用，是从当前进程的se开始，沿着task_group树从下到上对se调用指定的函数，即更新各个se的虚拟运行时间。在非组调度情况下，只会对当前se做处理。</p>
+<p>当要进行调度时，首先从当前cfs_rq队列选出一个se（这个跟非组调度一样，即红黑树最左边的节点），将se设置成下一个运行的se。再获取该se对应的task_group拥有的cfs_rq，继续这个过程，直到cfs_rq为空，即se对应的是一个进程。然后去调度这个se。</p>
+<p>同一层的task_group跟其他进程被当成同样的调度实体来选择。当被选到的是task_group时，对该task_group的子节点重复这个过程，直到选择一个运行的进程。因此当设置一个cgroup的shared时，该cgroup被当做一个整体来跟其他的进程组或进程共享CPU时间。</p>
+<blockquote>
+<p>  比如fork出来了一个子进程，其会继承父进程的一些资源，所以<code>parent</code>指针会指向创建它的父进程的<code>sched_entity</code>。另外可能某个调度组会是更大的调度组的一部分。所以得追溯到整个调度实体的层次结构，保证这些东西的一致性，以及分组内的进程都能获得相应的调度资源。</p>
+</blockquote>
+<h3 id="3-2-内存子系统"><a href="#3-2-内存子系统" class="headerlink" title="3.2 内存子系统"></a>3.2 内存子系统</h3><p>内存子系统可以设定cgroup中task使用的内存限制，并自动生成由那些任务使用的内存资源报告。在比较新的版本中，memory子系统是通过page_counter来支持内存子系统的功能的。</p>
+<p>cgroup的内存子系统限制每个控制组的page cache和RSS物理内存。</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">mem_cgroup</span> &#123;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> <span class="title">css</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* Private memcg ID. Used to ID objects that outlive the cgroup */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">mem_cgroup_id</span> <span class="title">id</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* Accounted resources */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">page_counter</span> <span class="title">memory</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">page_counter</span> <span class="title">swap</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* Legacy consumer-oriented counters */</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">page_counter</span> <span class="title">memsw</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">page_counter</span> <span class="title">kmem</span>;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">page_counter</span> <span class="title">tcpmem</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="type">int</span>	swappiness;</span><br><span class="line">	<span class="comment">/* OOM-Killer disable */</span></span><br><span class="line">	<span class="type">int</span>		oom_kill_disable;</span><br></pre></td></tr></table></figure>
+
+<p>其中的结构体page_counter是页计数器，单位是page：</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">page_counter</span> &#123;</span></span><br><span class="line">	<span class="type">atomic_long_t</span> usage; <span class="comment">// 已使用的内存页计数</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> min;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> low;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> max;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">page_counter</span> *<span class="title">parent</span>;</span></span><br><span class="line"></span><br><span class="line">	<span class="comment">/* effective memory.min and memory.min usage tracking */</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> emin;</span><br><span class="line">	<span class="type">atomic_long_t</span> min_usage;</span><br><span class="line">	<span class="type">atomic_long_t</span> children_min_usage;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* effective memory.low and memory.low usage tracking */</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> elow;</span><br><span class="line">	<span class="type">atomic_long_t</span> low_usage;</span><br><span class="line">	<span class="type">atomic_long_t</span> children_low_usage;</span><br><span class="line"></span><br><span class="line">	<span class="comment">/* legacy */</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> watermark;</span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> failcnt;</span><br><span class="line">&#125;;</span><br></pre></td></tr></table></figure>
+
+<p>当为内存控制组中的进程分配内存时，会记录内存使用量（做内存记账），以下是一些记录的时间点：</p>
+<ul>
+<li>第一次访问匿名页时分配内存页</li>
+<li>访问文件时分配物理页</li>
+<li>执行COW（写时复制时），分配物理页</li>
+<li>从交换区换入页</li>
+</ul>
+<p>mem_cgroup_try_charge() 用来表示尝试记账，对控制组的内存计数加上指定的数量。</p>
+<p>mem_over_limit用于计算是否超出了。</p>
+<blockquote>
+<p>  具体的代码流程后面再分析。</p>
+</blockquote>
+<h3 id="3-3-cpuset子系统"><a href="#3-3-cpuset子系统" class="headerlink" title="3.3 cpuset子系统"></a>3.3 cpuset子系统</h3><p>cpuset子系统为cgroup中的任务分配独立CPU和内存节点，其中定义了一个cpuset数据结构来管理其中的任务能够使用的cpu和内存节点。</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">cpuset</span> &#123;</span></span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">cgroup_subsys_state</span> <span class="title">css</span>;</span></span><br><span class="line">	<span class="type">unsigned</span> <span class="type">long</span> flags;		<span class="comment">/* &quot;unsigned long&quot; so bitops work */</span></span><br><span class="line">	<span class="comment">/* user-configured CPUs and Memory Nodes allow to tasks */</span></span><br><span class="line">	<span class="type">cpumask_var_t</span> cpus_allowed; <span class="comment">// 这两个定义了可以使用的cpu和内存节点</span></span><br><span class="line">	<span class="type">nodemask_t</span> mems_allowed;</span><br><span class="line">	<span class="comment">/* effective CPUs and Memory Nodes allow to tasks */</span></span><br><span class="line">	<span class="type">cpumask_var_t</span> effective_cpus;</span><br><span class="line">	<span class="type">nodemask_t</span> effective_mems;</span><br><span class="line">	<span class="type">nodemask_t</span> old_mems_allowed;</span><br><span class="line">	<span class="class"><span class="keyword">struct</span> <span class="title">fmeter</span> <span class="title">fmeter</span>;</span>		<span class="comment">/* memory_pressure filter */</span></span><br><span class="line">	<span class="type">int</span> attach_in_progress;</span><br><span class="line">	<span class="comment">/* partition number for rebuild_sched_domains() */</span></span><br><span class="line">	<span class="type">int</span> pn;</span><br><span class="line">	<span class="comment">/* for custom sched domain */</span></span><br><span class="line">	<span class="type">int</span> relax_domain_level;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>cpuset子系统的实现是在内核代码加入一些hook代码。</p>
+<p>具体来说，内核初始化代码start_kernel中调用了cpuset_init。cpumask_setall 和nodes_setall 将 top_cpuset 能使用的 cpu 和内存节点设置成所有节点。</p>
+<p>那怎么跟调度有关系的呢？进程描述符task_struct中有关于cpu_allow的定义，这个cpu_allowed和进程所属的cpuset的cpus_allowed保持一致；同时进程fork时子进程也会继承这个。在select_task_rq做调度时，就会对此做一个判断：</p>
+<figure class="highlight c"><table><tr><td class="code"><pre><span class="line"><span class="class"><span class="keyword">struct</span> <span class="title">task_struct</span> &#123;</span></span><br><span class="line">    <span class="type">int</span>				nr_cpus_allowed;</span><br><span class="line">	<span class="type">cpumask_t</span>			cpus_allowed;</span><br><span class="line">&#125;</span><br><span class="line"></span><br><span class="line"><span class="type">static</span> <span class="keyword">inline</span></span><br><span class="line"><span class="type">int</span> <span class="title function_">select_task_rq</span><span class="params">(<span class="keyword">struct</span> task_struct *p, <span class="type">int</span> cpu, <span class="type">int</span> sd_flags, <span class="type">int</span> wake_flags)</span></span><br><span class="line">&#123;</span><br><span class="line">	lockdep_assert_held(&amp;p-&gt;pi_lock);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (p-&gt;nr_cpus_allowed &gt; <span class="number">1</span>)</span><br><span class="line">		cpu = p-&gt;sched_class-&gt;select_task_rq(p, cpu, sd_flags, wake_flags);</span><br><span class="line">	<span class="keyword">else</span></span><br><span class="line">		cpu = cpumask_any(&amp;p-&gt;cpus_allowed);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">if</span> (unlikely(!is_cpu_allowed(p, cpu)))</span><br><span class="line">		cpu = select_fallback_rq(task_cpu(p), p);</span><br><span class="line"></span><br><span class="line">	<span class="keyword">return</span> cpu;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<blockquote>
+<p>  内存节点待补充。</p>
+</blockquote>
+<h2 id="4-虚拟化和容器对cgroup的使用"><a href="#4-虚拟化和容器对cgroup的使用" class="headerlink" title="4. 虚拟化和容器对cgroup的使用"></a>4. 虚拟化和容器对cgroup的使用</h2><p>对于虚拟化来说，libvirt在启动虚拟机前，可以对其做一些cgroup的限制，比如限制cpuset等。</p>
+<h2 id="参考链接"><a href="#参考链接" class="headerlink" title="参考链接"></a>参考链接</h2><p><a href="https://zhuanlan.zhihu.com/p/680506976">Linux内核源码解析—cgroup实现之整体架构与初始化</a></p>
+<p><a href="https://cloud.tencent.com/developer/article/2128337">【重识云原生】第六章容器6.1.7.3节——cgroups数据结构剖析</a></p>
+<p><a href="https://blog.csdn.net/qq_40079927/article/details/134218081">linux cgroup (1)—-初始化</a></p>
+<p><a href="https://www.bookstack.cn/read/linux-insides-zh/Cgroups-linux-cgroups-1.md">https://www.bookstack.cn/read/linux-insides-zh/Cgroups-linux-cgroups-1.md</a></p>
+<p>《Linux Cgroups 详解》 – 王喆锋</p>
+<p>cpu子系统：</p>
+<p><a href="https://s3.shizhz.me/linux-sched/cfs-sched/group-data-structure">https://s3.shizhz.me/linux-sched/cfs-sched/group-data-structure</a></p>
+<p><a href="https://abcdxyzk.github.io/blog/2015/08/07/cgroup-4/">https://abcdxyzk.github.io/blog/2015/08/07/cgroup-4/</a></p>
+<p>内存子系统：</p>
+<p><a href="https://www.leviathan.vip/2019/09/01/Linux%E5%86%85%E6%A0%B8%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90-%E7%90%86%E8%A7%A3%E5%86%85%E5%AD%98%E8%B5%84%E6%BA%90%E6%8E%A7%E5%88%B6%E5%99%A8cgroup/">Linux 内核源码分析-理解 cgroup 内存资源控制</a></p>
+]]></content>
+      <categories>
+        <category>Linux</category>
+      </categories>
+      <tags>
+        <tag>Linux</tag>
+        <tag>docker</tag>
+      </tags>
+  </entry>
+  <entry>
+    <title>容器的基本概念</title>
+    <url>/2024/07/04/linux-contianer/</url>
+    <content><![CDATA[<p>容器本质上就是依赖于内核的隔离机制，提供了一套受到资源限制而彼此间相互隔离的linux进程集合。借助于cgroups、namespace以及内核相关的内容使应用可以在一个沙箱环境中独立运行。</p>
+<span id="more"></span>
+<p>相对于虚拟化来说，容器的体量更加轻量级，并且提供了一套标准化的交互方式，使应用不再受到环境限制，简化了应用构建、部署等流程。</p>
+<h2 id="1-容器的核心原理"><a href="#1-容器的核心原理" class="headerlink" title="1. 容器的核心原理"></a>1. 容器的核心原理</h2><p>容器的核心技术有三点：</p>
+<ul>
+<li>namespace进行资源隔离</li>
+<li>cgroups进行资源限制。</li>
+<li>基于unionfs实现镜像的分层机制</li>
+</ul>
+<p><strong>namespace提供了一种内核级别隔离系统资源的方法</strong>，通过将系统的全局资源放在不同的namespace中实现资源隔离的目的。如下所示，linux目前提供了8类系统资源的隔离。关于linux在namespace代码层面的分析，参考该文章。</p>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Cgroup</td>
+<td>Cgroup root directory cgroup 根目录</td>
+</tr>
+<tr>
+<td>IPC</td>
+<td>System V IPC, POSIX message queues信号量，消息队列</td>
+</tr>
+<tr>
+<td>Network</td>
+<td>Network devices, stacks, ports, etc.网络设备，协议栈，端口等等</td>
+</tr>
+<tr>
+<td>Mount</td>
+<td>Mount points挂载点</td>
+</tr>
+<tr>
+<td>PID</td>
+<td>Process IDs进程号</td>
+</tr>
+<tr>
+<td>User</td>
+<td>用户和组 ID</td>
+</tr>
+<tr>
+<td>UTS</td>
+<td>系统主机名和 NIS(Network Information Service) 主机名（有时称为域名）</td>
+</tr>
+<tr>
+<td>Time</td>
+<td>时钟</td>
+</tr>
+</tbody></table>
+<p><strong>cgroups可以实现对资源的限制。</strong>linux cgroups可以限制单个或多个进程所使用的物理资源，从而对cpu、内存、io、网络等实现精准的控制。目前主要支持12中子系统的资源限制。总体上来说cgroups的主要功能有：（1）资源限制；（2）优先级分配；（3）资源统计；（3）进程控制（进程组的挂起、恢复等操作）。关于cgroups的进一步分析，参考该文章。</p>
+<p><strong>unionfs（联合文件系统）可以将不同物理位置的目录合并、挂载到同一个目录中，净相同的部分合并</strong>，实际上目录的物理位置是分开的。容器就是利用unionfs实现了镜像分层，这样不同的容器可以看到不同的目录结构。其中bootfs包含了操作系统的bootloader和kernel，而rootfs包含常见的目录结构（&#x2F;dev、&#x2F;lib、&#x2F;proc、&#x2F;bin等）。容器镜像设计中，为了解决各类依赖以及依赖共享，引入了层（layer）的概念，在镜像构建中，每一个指令都会生成一个层，也就是一个增量的 rootfs，这样逐层构建，容器内部的更改都会被保存为最上面的读写层，而其他层都是只读。启动容器时再通过 UnionFs 把相关的层挂载到一个目录，作为容器的根文件系统，这就是容器镜像的原理。（这部分的代码细节后面再整理）</p>
+<h3 id="1-1-一些术语"><a href="#1-1-一些术语" class="headerlink" title="1.1 一些术语"></a>1.1 一些术语</h3><p><strong>OCI（Open Container Initiative）开放容器协议</strong>，旨在推动<strong>容器运行时</strong>和<strong>容器镜像格式</strong>的开放标准化。其中的规范包括：</p>
+<p>（1）Runtime Specification（运行时规范）：定义了容器的生命周期管理，包括创建、启动、停止和销毁容器等操作。最常见的容器运行时实现是OCI Runtime（也称为runc）。</p>
+<p>（2）Image Specification（镜像规范）：定义了容器镜像的结构和格式，包括镜像的分层结构、元数据和配置等信息。常见的镜像格式是OCI Image（也称为OCI Image Format）。</p>
+<p><strong>CRI（Container Runtime Interface 容器运行时接口）</strong>：本质上是k8s定义的一组与容器运行时进行交互的接口。所以只要实现了这套接口的容器运行时都可以对接到 Kubernetes 平台上来。但是因为有些容器运行时可能不会自身去实现CRI接口，所以就有slim作为适配器将运行时的接口适配到k8s的CRI接口上。</p>
+<h2 id="2-容器镜像"><a href="#2-容器镜像" class="headerlink" title="2. 容器镜像"></a>2. 容器镜像</h2><p>容器镜像简单理解就是个 Gzip 压缩的特殊文件系统，内部包含了容器运行时所需的程序、库、资源、配置等。</p>
+<h2 id="3-容器运行时"><a href="#3-容器运行时" class="headerlink" title="3. 容器运行时"></a>3. 容器运行时</h2><p>runtime（运行时）的概念：<strong>容器运行时可以理解为管理容器的一类软件组件</strong>，提供资源隔离和限制的环境，负责创建、启停和删除容器，同时管理容器的整个生命周期（包括以标准化的方式打包、分发、运行应用）。</p>
+<p>根据功能的不同，运行时可以分成低层运行时和高层运行时。低层主要负责资源的隔离和限制、容器的创建销毁等基础操作。高层的还提供了镜像管理、容器编排等功能。</p>
+<h3 id="3-1-低层运行时"><a href="#3-1-低层运行时" class="headerlink" title="3.1 低层运行时"></a>3.1 低层运行时</h3><p>主要关注怎么跟操作系统交互，使用namespace和cgroups实现资源隔离和限制，创建并运行容器，且管理容器的整个生命周期。</p>
+<p>常见的低层运行时有：</p>
+<ul>
+<li>runc。目前应用最广泛的运行时，基于 Linux Namespace 和 Cgroups 实现。</li>
+<li>crun。比 runc 更快</li>
+<li>runv。基于虚拟机管理程序的运行时，通过虚拟化 guest kernel，将容器与宿主机隔离，使其边界更加清晰，代表： kata Containers。</li>
+<li><strong>rusc</strong> runc + safety，通过拦截应用程序的系统调用，而提供安全隔离的轻量级容器运行时沙箱，代表： Google 的 gVisor。</li>
+</ul>
+<h3 id="3-2-高层运行时"><a href="#3-2-高层运行时" class="headerlink" title="3.2 高层运行时"></a>3.2 高层运行时</h3><p>高层运行时负责容器镜像的管理和传输，解压缩镜像，然后传递给低层运行时来运行容器。</p>
+<p>目前主流的高层容器运行时有 containerd 、CRI-O 等。</p>
+<ul>
+<li>containerd 是一个面向容器生命周期管理的高层容器运行时。它提供了容器的生命周期管理、镜像管理、存储管理和网络管理等功能。containerd 可以与容器编排系统（如 Kubernetes）紧密集成，为容器的创建、启动、停止和销毁等操作提供 API 接口。</li>
+<li>CRI-O是一个轻量级容器运行时，专注于在Kubernetes环境中运行容器，符合Kubernetes CRI规范，使用runc作为底层执行引擎。</li>
+</ul>
+<blockquote>
+<p>  runc 是 Docker 和 containerd 的一个组件（说明：containerd也是docker的一个组件），它是一个独立的容器运行时工具，被设计用于创建和管理容器的生命周期，Docker 和 containerd 都使用 runc 作为底层的容器执行引擎。也就是说，runc提供了容器的执行引擎，被上层的管理工具使用。低层运行时与高层运行时并不冲突，两者可以协同完成功能的实现。</p>
+</blockquote>
+<h3 id="3-3-安全容器运行时"><a href="#3-3-安全容器运行时" class="headerlink" title="3.3 安全容器运行时"></a>3.3 安全容器运行时</h3><p>以kata为代表。</p>
+<p>尽管容器有许多技术优势，然而传统以 runC 为代表的容器方案基于共享内核技术进行的软隔离和控制，如果某个容器中的恶意程序利用系统缺陷从容器中逃逸，则会对宿主机造成严重的威胁，尤其是公有云环境，安全威胁很可能会波及到其他用户的数据和业务。</p>
+<p>kata将虚拟机的安全优势与容器的高速和可管理性结合起来，提供了一个标准化、安全、高性能的容器解决方案。</p>
+<img src="/images/202406291455504.png" alt="img" style="zoom:60%;" />
+
+<p>Kata Containers 启用的虚拟机就可以视为一个 Pod，虚拟机里面的进程共享网络空间。</p>
+<h2 id="4-docker浅析"><a href="#4-docker浅析" class="headerlink" title="4. docker浅析"></a>4. docker浅析</h2><p>docker包含了高层容器运行时containered和低层容器运行时runc。containered可以提供更高级别的容器管理功能，并且能够与k8s等容器编排系统紧密集成。它主要负责容器的生命周期管理、镜像管理和资源管理等任务，同时使用runc作为低层容器运行时来执行实际的容器创建与运行操作。</p>
+<blockquote>
+<p>  从虚拟机的角度来说，感觉可以认为：k8s类似于管控，负责调度和编排；libvirt类似于containered，负责管理虚拟机和通过解析xml分配资源；qemu负责实际的虚拟机创建与运行。</p>
+</blockquote>
+<p>docker的架构如下：</p>
+<img src="/images/202406301822090.png" alt="img" style="zoom:30%;" />
+
+<p>现在docker在创建一个容器时，Docker Daemon 请求 containerd 来创建一个容器，containerd创建一个叫做 containerd-shim 的进程去操作容器。</p>
+<blockquote>
+<p>  每一个容器起起来之后，都会有一个conatinerd-shim存在。这样可以接管containered对状态的收集等操作，当containered挂掉后容器依然能正常运行。</p>
+</blockquote>
+<p>接下来创建容器需要做一些 namespaces 和 cgroups 的配置，以及挂载 root 文件系统等操作。这些依赖于runc这个底层运行时完成。</p>
+<p><strong>所以真正启动容器是通过 containerd-shim 去调用 runc 来启动容器的，runc 启动完容器后本身会直接退出，containerd-shim 则会成为容器进程的父进程, 负责收集容器进程的状态, 上报给 containerd, 并在容器中 pid 为 1 的进程退出后接管容器中的子进程进行清理, 确保不会出现僵尸进程。</strong></p>
+<p>参考：</p>
+<p><a href="https://www.thebyte.com.cn/container/unionfs.html">https://www.thebyte.com.cn/container/unionfs.html</a></p>
+<p><a href="https://www.cnblogs.com/makelu/p/11018212.html">https://www.cnblogs.com/makelu/p/11018212.html</a></p>
+<p><a href="https://www.cnblogs.com/zhangmingcheng/p/17492677.html">https://www.cnblogs.com/zhangmingcheng/p/17492677.html</a></p>
+<p><a href="https://www.cnblogs.com/zhangmingcheng/p/17495311.html">https://www.cnblogs.com/zhangmingcheng/p/17495311.html</a></p>
+]]></content>
+      <categories>
+        <category>docker</category>
+      </categories>
+      <tags>
+        <tag>docker</tag>
+      </tags>
+  </entry>
 </search>
